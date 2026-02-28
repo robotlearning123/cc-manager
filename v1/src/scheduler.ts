@@ -245,6 +245,11 @@ export class Scheduler {
     });
   }
 
+  private sortQueue(): void {
+    const priorityOrder: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+    this.queue.sort((a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2));
+  }
+
   private async loop(): Promise<void> {
     while (this.running) {
       // Queue empty — nothing to dispatch; sleep long and wait for a submission.
@@ -272,9 +277,7 @@ export class Scheduler {
         }
       }
 
-      // Sort queue: high → normal → low before picking the next task
-      const priorityOrder: Record<string, number> = { high: 0, normal: 1, low: 2 };
-      this.queue.sort((a, b) => (priorityOrder[a.priority] ?? 1) - (priorityOrder[b.priority] ?? 1));
+      this.sortQueue();
 
       const task = this.queue.shift()!;
 
