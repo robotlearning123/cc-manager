@@ -59,6 +59,48 @@ export class WebServer {
       return c.json(task);
     });
 
+    // API: task output (plain text for easy curl consumption)
+    app.get("/api/tasks/:id/output", (c) => {
+      const task = this._scheduler.getTask(c.req.param("id"));
+      if (!task) return c.text("not found", 404);
+      return c.text(task.output);
+    });
+
+    // API: batch submit tasks
+    app.post("/api/tasks/batch", async (c) => {
+      let body: { prompts?: unknown; timeout?: unknown; maxBudget?: unknown };
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: "bad json" }, 400);
+      }
+      if (!Array.isArray(body.prompts) || body.prompts.length === 0) {
+        return c.json({ error: "prompts must be a non-empty array" }, 400);
+      }
+      if (body.prompts.length > 20) {
+        return c.json({ error: "batch size cannot exceed 20 prompts" }, 400);
+      }
+      for (let i = 0; i < body.prompts.length; i++) {
+        if (typeof body.prompts[i] !== "string" || (body.prompts[i] as string).trim() === "") {
+          return c.json({ error: `prompts[${i}] must be a non-empty string` }, 400);
+        }
+      }
+      if (body.timeout !== undefined && (typeof body.timeout !== "number" || body.timeout <= 0)) {
+        return c.json({ error: "timeout must be a positive number" }, 400);
+      }
+      if (body.maxBudget !== undefined && (typeof body.maxBudget !== "number" || body.maxBudget <= 0)) {
+        return c.json({ error: "maxBudget must be a positive number" }, 400);
+      }
+      const results = (body.prompts as string[]).map((prompt) => {
+        const task = this._scheduler.submit(prompt, {
+          timeout: body.timeout as number | undefined,
+          maxBudget: body.maxBudget as number | undefined,
+        });
+        return { id: task.id, status: task.status };
+      });
+      return c.json(results, 201);
+    });
+
     // API: submit task
     app.post("/api/tasks", async (c) => {
       let body: { prompt?: unknown; timeout?: unknown; maxBudget?: unknown };
