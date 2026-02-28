@@ -62,6 +62,9 @@ export class Store {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at)"
     );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)"
+    );
   }
 
   save(task: Task): void {
