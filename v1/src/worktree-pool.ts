@@ -1,14 +1,24 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { WorkerInfo } from "./types.js";
 import { log } from "./logger.js";
 
+/** Internal per-worker tracking not stored on WorkerInfo itself. */
+interface WorkerMeta {
+  busySince?: number; // epoch ms when worker became busy
+  taskCount: number;  // lifetime count of tasks processed by this worker
+}
+
+/** Extended status object returned by getStatus(), adding uptime and taskCount. */
+export type WorkerStatus = WorkerInfo & { uptime?: number; taskCount: number };
+
 const exec = promisify(execFile);
 
 export class WorktreePool {
   private workers: Map<string, WorkerInfo> = new Map();
+  private workerMeta: Map<string, WorkerMeta> = new Map();
   private lock = false;
 
   constructor(
@@ -40,6 +50,7 @@ export class WorktreePool {
       }
 
       this.workers.set(name, { name, path: workerPath, branch, busy: false });
+      this.workerMeta.set(name, { taskCount: 0 });
     }
 
     log("info", "[pool] worktrees ready", { count: this.workers.size });
@@ -52,6 +63,10 @@ export class WorktreePool {
       for (const w of this.workers.values()) {
         if (!w.busy) {
           w.busy = true;
+          const meta = this.workerMeta.get(w.name) ?? { taskCount: 0 };
+          meta.busySince = Date.now();
+          meta.taskCount += 1;
+          this.workerMeta.set(w.name, meta);
           await this.resetWorktree(w);
           return w;
         }
@@ -76,6 +91,8 @@ export class WorktreePool {
 
       w.busy = false;
       w.currentTask = undefined;
+      const meta = this.workerMeta.get(w.name);
+      if (meta) meta.busySince = undefined;
       return result;
     } finally {
       this.lock = false;
@@ -156,8 +173,83 @@ export class WorktreePool {
     return this.workers.size - this.available;
   }
 
-  getStatus(): WorkerInfo[] {
-    return [...this.workers.values()];
+  /**
+   * Find the worker currently running the given task ID.
+   * Returns undefined if no worker is handling that task.
+   */
+  getWorkerByTask(taskId: string): WorkerInfo | undefined {
+    for (const w of this.workers.values()) {
+      if (w.currentTask === taskId) return w;
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns true if the worker has been continuously busy for longer than
+   * maxAgeMs milliseconds — a signal that it may be stuck.
+   */
+  isStale(worker: WorkerInfo, maxAgeMs: number): boolean {
+    if (!worker.busy) return false;
+    const meta = this.workerMeta.get(worker.name);
+    if (!meta?.busySince) return false;
+    return Date.now() - meta.busySince > maxAgeMs;
+  }
+
+  /**
+   * Forcefully releases a stuck worker: attempts to kill its process (if a
+   * PID was associated via the `pid` field on WorkerInfo), resets the git
+   * worktree to a clean state, and marks the worker as available again.
+   */
+  async forceRelease(workerName: string): Promise<void> {
+    await this.waitLock();
+    this.lock = true;
+    try {
+      const w = this.workers.get(workerName);
+      if (!w) {
+        log("warn", "[pool] forceRelease: unknown worker", { workerName });
+        return;
+      }
+
+      // Best-effort: kill the worker's process group so orphaned subprocesses
+      // are also terminated.  We use the PGID derived from the stored PID so
+      // that we don't accidentally kill unrelated processes.
+      const pid = (w as WorkerInfo & { pid?: number }).pid;
+      if (pid) {
+        try {
+          execFileSync("kill", ["-9", String(pid)]);
+          log("info", "[pool] forceRelease: killed process", { workerName, pid });
+        } catch {
+          // Process may have already exited — that's fine.
+        }
+        delete (w as WorkerInfo & { pid?: number }).pid;
+      }
+
+      // Reset the worktree to a clean state so it can be reused.
+      await this.resetWorktree(w);
+
+      w.busy = false;
+      w.currentTask = undefined;
+      const meta = this.workerMeta.get(w.name);
+      if (meta) meta.busySince = undefined;
+
+      log("info", "[pool] forceRelease: worker freed", { workerName });
+    } finally {
+      this.lock = false;
+    }
+  }
+
+  /**
+   * Returns the status of every worker, enriched with:
+   *  - `uptime`: milliseconds the worker has been continuously busy (undefined if idle)
+   *  - `taskCount`: total number of tasks the worker has processed since init
+   */
+  getStatus(): WorkerStatus[] {
+    const now = Date.now();
+    return [...this.workers.values()].map((w) => {
+      const meta = this.workerMeta.get(w.name) ?? { taskCount: 0 };
+      const uptime = meta.busySince !== undefined ? now - meta.busySince : undefined;
+      return { ...w, uptime, taskCount: meta.taskCount };
+    });
   }
 
   private async git(...args: string[]) {
