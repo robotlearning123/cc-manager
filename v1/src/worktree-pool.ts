@@ -29,8 +29,7 @@ export class WorktreePool {
       const branch = `worker/${name}`;
 
       if (existsSync(workerPath)) {
-        await this.gitIn(workerPath, "checkout", branch).catch(() => {});
-        await this.gitIn(workerPath, "reset", "--hard", "main").catch(() => {});
+        await this.resetWorktree({ name, path: workerPath, branch, busy: false });
       } else {
         await this.git("branch", "-D", branch).catch(() => {});
         const r = await this.git("worktree", "add", "-b", branch, workerPath, "main").catch(() => null);
@@ -52,7 +51,7 @@ export class WorktreePool {
       for (const w of this.workers.values()) {
         if (!w.busy) {
           w.busy = true;
-          await this.gitIn(w.path, "reset", "--hard", "main").catch(() => {});
+          await this.resetWorktree(w);
           return w;
         }
       }
@@ -82,6 +81,42 @@ export class WorktreePool {
     }
   }
 
+  async isHealthy(name: string): Promise<boolean> {
+    const w = this.workers.get(name);
+    if (!w || !existsSync(w.path)) return false;
+    try {
+      await this.gitIn(w.path, "rev-parse", "--git-dir");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async resetWorktree(w: WorkerInfo): Promise<void> {
+    try {
+      await this.gitIn(w.path, "checkout", w.branch);
+    } catch (err) {
+      console.error(`[pool][${w.name}] checkout failed:`, err);
+    }
+
+    // Try origin/main first (picks up upstream changes), fall back to local main
+    try {
+      await this.gitIn(w.path, "reset", "--hard", "origin/main");
+    } catch {
+      try {
+        await this.gitIn(w.path, "reset", "--hard", "main");
+      } catch (err) {
+        console.error(`[pool][${w.name}] reset failed:`, err);
+      }
+    }
+
+    try {
+      await this.gitIn(w.path, "clean", "-fdx");
+    } catch (err) {
+      console.error(`[pool][${w.name}] clean failed:`, err);
+    }
+  }
+
   private async mergeToMain(w: WorkerInfo): Promise<{ merged: boolean; conflictFiles?: string[] }> {
     // Check if branch has new commits vs main
     const { stdout: diff } = await this.git("log", `main..${w.branch}`, "--oneline");
@@ -106,7 +141,7 @@ export class WorktreePool {
     }
 
     // Reset worktree to latest main
-    await this.gitIn(w.path, "reset", "--hard", "main").catch(() => {});
+    await this.resetWorktree(w);
     return { merged: true };
   }
 
