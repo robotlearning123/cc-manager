@@ -7,7 +7,7 @@ Multi-agent orchestrator that runs parallel Claude Code agents in git worktrees.
 - **v1/src/index.ts** — CLI entry point (Commander.js)
 - **v1/src/server.ts** — Hono REST API + SSE
 - **v1/src/scheduler.ts** — Task queue, priority dispatch, retry logic, stale worker recovery
-- **v1/src/agent-runner.ts** — Claude Agent SDK wrapper, cost/token tracking
+- **v1/src/agent-runner.ts** — Multi-agent CLI spawning (Claude, Codex, generic), cost tracking, code review
 - **v1/src/worktree-pool.ts** — Git worktree lifecycle, parallel init, merge
 - **v1/src/store.ts** — SQLite persistence (better-sqlite3, WAL mode)
 - **v1/src/types.ts** — Shared TypeScript types
@@ -16,15 +16,20 @@ Multi-agent orchestrator that runs parallel Claude Code agents in git worktrees.
 
 ## Tech Stack
 - TypeScript 5 / Node.js ESM
-- `@anthropic-ai/claude-agent-sdk` v0.2.62
+- Agent integration via `child_process.spawn` (supports Claude CLI, Codex CLI, any terminal agent)
 - `hono` + `@hono/node-server`
 - `better-sqlite3` (WAL mode)
 - `commander` for CLI
 
-## Build & Run
+## Build, Test & Run
 ```bash
 cd v1 && npx tsc && cp src/web/index.html dist/web/index.html
 node dist/index.js --repo /path/to/repo --workers 5 --port 8080
+```
+
+```bash
+# Run tests (66 tests across 5 suites)
+cd v1 && node --import tsx --test src/__tests__/*.test.ts
 ```
 
 ## Development Rules
@@ -131,3 +136,15 @@ pending → running → success (branch merged to main)
 - `v1/src/__tests__/store.test.ts` — Store CRUD, search, cleanup, errors (BDD-style)
 - `v1/src/__tests__/worktree-pool.test.ts` — WorktreePool lifecycle
 - `v1/src/__tests__/scheduler.test.ts` — Submit, cancel, stats, queue position
+- `v1/src/__tests__/agent-runner.test.ts` — Cost estimation, code review, system prompt, CLI dispatch
+- `v1/src/__tests__/server.test.ts` — API input validation (prompt, timeout, priority, tags, webhookUrl)
+
+## Repository
+- **GitHub**: `agent-next/cc-manager` (private)
+- **Version**: v0.1.0
+
+## Known Gotchas
+- `getDailyStats()` returns `{total, success, cost, successRate}` — do NOT use `count` (old field name, causes silent breakage in dashboard + scheduler)
+- Dashboard `esc()` must escape single quotes (`&#39;`) for onclick handlers
+- Claude CLI spawning: must clear `CLAUDECODE` and `CLAUDE_CODE_*` env vars to prevent nesting
+- `POST /api/tasks` accepts `agent` field: `"claude"`, `"codex"`, or any CLI command string
