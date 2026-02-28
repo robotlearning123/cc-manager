@@ -222,6 +222,7 @@
   }
   .submit-col button:hover { background: #2ea043; }
   .submit-hint { font-size: 0.71em; color: var(--text-muted); }
+  .submit-error { color: var(--danger); background: var(--st-failed-bg); border: 1px solid var(--danger); border-radius: 6px; padding: 8px 12px; font-size: 0.88em; margin-bottom: 10px; }
 
   /* ── Table ── */
   table { width: 100%; border-collapse: collapse; }
@@ -431,6 +432,7 @@
     <span class="submit-hint">Ctrl+Enter</span>
   </div>
 </div>
+<div id="submit-error" class="submit-error" style="display:none"></div>
 
 <!-- Worker Status Panel -->
 <div class="worker-panel">
@@ -673,11 +675,20 @@ async function submitTask() {
   const el = document.getElementById('prompt');
   const prompt = el.value.trim();
   if (!prompt) return;
-  await fetch('/api/tasks', {
+  const errEl = document.getElementById('submit-error');
+  errEl.style.display = 'none';
+  const res = await fetch('/api/tasks', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
   });
+  if (!res.ok) {
+    let msg = 'Submission failed';
+    try { const j = await res.json(); msg = j.error ?? j.message ?? msg; } catch(_) {}
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
+    return;
+  }
   el.value = '';
   autoResize(el);
   refresh();
