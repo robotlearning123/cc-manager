@@ -34,6 +34,30 @@ export class WebServer {
       return c.html(html);
     });
 
+    // API: health check
+    app.get("/api/health", (c) => {
+      const stats = this._scheduler.getStats();
+      const workerList = this.pool.getStatus();
+      return c.json({
+        status: "ok",
+        uptime: process.uptime(),
+        version: "1.0.0",
+        workers: {
+          total: workerList.length,
+          busy: this.pool.busy,
+          available: this.pool.available,
+        },
+        tasks: {
+          total: stats.total,
+          running: stats.byStatus["running"] ?? 0,
+          queued: stats.queueSize,
+          success: stats.byStatus["success"] ?? 0,
+          failed: stats.byStatus["failed"] ?? 0,
+        },
+        totalCost: stats.totalCost,
+      });
+    });
+
     // API: stats
     app.get("/api/stats", (c) => c.json(this._scheduler.getStats()));
 

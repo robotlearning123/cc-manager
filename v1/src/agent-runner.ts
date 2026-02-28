@@ -61,6 +61,16 @@ When done, stage and commit your changes:
           timestamp: new Date().toISOString(),
         };
 
+        if (msg.type === "assistant" && msg.message?.content) {
+          const text = (msg.message.content as Array<{ type: string; text?: string }>)
+            .filter((b) => b.type === "text" && b.text)
+            .map((b) => b.text as string)
+            .join("");
+          if (text) {
+            onEvent?.({ type: "task_log", taskId: task.id, text });
+          }
+        }
+
         if (msg.type === "result") {
           task.durationMs = Date.now() - startMs;
           task.costUsd = msg.total_cost_usd ?? 0;
