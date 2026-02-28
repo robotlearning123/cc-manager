@@ -287,6 +287,238 @@ export class WebServer {
         }
       });
     });
+
+    // API: self-documenting endpoint listing
+    app.get("/api/docs", (c) => {
+      const docs = {
+        version: "1.0.0",
+        description: "cc-manager API – schedule and manage Claude agent tasks across git worktrees",
+        endpoints: [
+          {
+            method: "GET",
+            path: "/api/health",
+            description: "Health check. Returns server uptime, version, worker pool summary, and aggregate task counts.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/health",
+            },
+            exampleResponse: {
+              status: "ok",
+              uptime: 3600,
+              version: "1.0.0",
+              workers: { total: 4, busy: 1, available: 3 },
+              tasks: { total: 42, running: 1, queued: 2, success: 38, failed: 1 },
+              totalCost: 0.27,
+            },
+          },
+          {
+            method: "GET",
+            path: "/api/stats",
+            description: "Detailed scheduler statistics including per-status counts, queue depth, average duration, and budget usage.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/stats",
+            },
+            exampleResponse: {
+              total: 42,
+              byStatus: { pending: 2, running: 1, success: 38, failed: 1 },
+              totalCost: 0.27,
+              queueSize: 2,
+              activeWorkers: 1,
+              avgDurationMs: 18500,
+              totalBudgetLimit: 10,
+            },
+          },
+          {
+            method: "GET",
+            path: "/api/budget",
+            description: "Budget summary showing total USD spent, the configured limit (0 = unlimited), and remaining allowance.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/budget",
+            },
+            exampleResponse: {
+              spent: 0.27,
+              limit: 10,
+              remaining: 9.73,
+            },
+          },
+          {
+            method: "GET",
+            path: "/api/tasks",
+            description: "List tasks. Supports optional query filters: status, q (keyword search in prompt), limit, and tag.",
+            queryParams: {
+              status: "Filter by task status: pending | running | success | failed | timeout | cancelled",
+              q: "Keyword to search within task prompts (case-insensitive)",
+              limit: "Maximum number of tasks to return (positive integer)",
+              tag: "Filter tasks that include this tag",
+            },
+            exampleRequest: {
+              method: "GET",
+              url: "/api/tasks?status=success&limit=5",
+            },
+            exampleResponse: [
+              {
+                id: "abc123",
+                prompt: "Refactor the auth module to use JWT…",
+                status: "success",
+                worktree: "worker-1",
+                costUsd: 0.04,
+                createdAt: "2024-01-15T10:00:00.000Z",
+                completedAt: "2024-01-15T10:00:22.000Z",
+                durationMs: 22000,
+                tags: ["auth", "refactor"],
+              },
+            ],
+          },
+          {
+            method: "GET",
+            path: "/api/tasks/:id",
+            description: "Get full details of a single task by its ID, including output, events, token counts, and timing.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/tasks/abc123",
+            },
+            exampleResponse: {
+              id: "abc123",
+              prompt: "Refactor the auth module to use JWT",
+              status: "success",
+              priority: "normal",
+              worktree: "worker-1",
+              output: "Done. Updated src/auth.ts and added tests.",
+              error: "",
+              events: [
+                { type: "start", timestamp: "2024-01-15T10:00:00.000Z" },
+                { type: "complete", timestamp: "2024-01-15T10:00:22.000Z" },
+              ],
+              createdAt: "2024-01-15T10:00:00.000Z",
+              startedAt: "2024-01-15T10:00:01.000Z",
+              completedAt: "2024-01-15T10:00:22.000Z",
+              timeout: 300000,
+              maxBudget: 1,
+              costUsd: 0.04,
+              tokenInput: 1200,
+              tokenOutput: 340,
+              durationMs: 22000,
+              retryCount: 0,
+              maxRetries: 2,
+              tags: ["auth", "refactor"],
+            },
+          },
+          {
+            method: "GET",
+            path: "/api/tasks/:id/output",
+            description: "Return the raw text output of a completed task. Useful for piping into other tools via curl.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/tasks/abc123/output",
+            },
+            exampleResponse: "Done. Updated src/auth.ts and added tests.",
+          },
+          {
+            method: "POST",
+            path: "/api/tasks",
+            description: "Submit a single task. Rate-limited to 30 requests per minute per IP. Returns the new task ID and initial status.",
+            rateLimit: "30 requests / 60 s per IP",
+            requestBody: {
+              prompt: "string – required, non-empty",
+              timeout: "number – optional, milliseconds (must be > 0)",
+              maxBudget: "number – optional, USD spend cap per task (must be > 0)",
+              priority: "string – optional: low | normal | high (default: normal)",
+              tags: "string[] – optional, up to 10 items each ≤ 50 chars",
+              webhookUrl: "string – optional, must start with 'http'",
+            },
+            exampleRequest: {
+              method: "POST",
+              url: "/api/tasks",
+              body: {
+                prompt: "Add input validation to the signup form",
+                priority: "high",
+                maxBudget: 0.5,
+                tags: ["frontend", "validation"],
+              },
+            },
+            exampleResponse: { id: "def456", status: "pending" },
+          },
+          {
+            method: "POST",
+            path: "/api/tasks/batch",
+            description: "Submit up to 20 tasks in a single request. All tasks share the same optional timeout and maxBudget overrides.",
+            requestBody: {
+              prompts: "string[] – required, 1–20 non-empty strings",
+              timeout: "number – optional, milliseconds applied to every task",
+              maxBudget: "number – optional, USD cap applied to every task",
+            },
+            exampleRequest: {
+              method: "POST",
+              url: "/api/tasks/batch",
+              body: {
+                prompts: [
+                  "Write unit tests for the payment module",
+                  "Add JSDoc comments to src/utils.ts",
+                ],
+                maxBudget: 1,
+              },
+            },
+            exampleResponse: [
+              { id: "ghi789", status: "pending" },
+              { id: "jkl012", status: "pending" },
+            ],
+          },
+          {
+            method: "DELETE",
+            path: "/api/tasks/:id",
+            description: "Cancel a pending or running task. Returns 400 if the task cannot be cancelled (e.g. already completed).",
+            exampleRequest: {
+              method: "DELETE",
+              url: "/api/tasks/abc123",
+            },
+            exampleResponse: { ok: true },
+          },
+          {
+            method: "GET",
+            path: "/api/workers",
+            description: "List all worker slots in the pool with their name, worktree path, git branch, busy status, and current task ID.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/workers",
+            },
+            exampleResponse: [
+              { name: "worker-1", path: "/repo/.claude/worktrees/worker-1", branch: "worker-1", busy: true, currentTask: "abc123" },
+              { name: "worker-2", path: "/repo/.claude/worktrees/worker-2", branch: "worker-2", busy: false },
+            ],
+          },
+          {
+            method: "GET",
+            path: "/api/events",
+            description: "Server-Sent Events stream for real-time task lifecycle notifications. Emits task_queued and task_final events. Sends a keep-alive ping every 15 s.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/events",
+              note: "Use EventSource in the browser or curl --no-buffer",
+            },
+            exampleResponse: {
+              note: "Stream of SSE messages",
+              events: [
+                { type: "task_queued", id: "abc123", prompt: "…" },
+                { type: "task_final", id: "abc123", status: "success", costUsd: 0.04 },
+              ],
+            },
+          },
+          {
+            method: "GET",
+            path: "/api/docs",
+            description: "This endpoint. Returns a self-describing JSON object listing every available API endpoint with method, path, description, and example request/response.",
+            exampleRequest: {
+              method: "GET",
+              url: "/api/docs",
+            },
+            exampleResponse: { version: "1.0.0", description: "…", endpoints: ["…"] },
+          },
+        ],
+      };
+      return c.json(docs);
+    });
   }
 
   broadcast(event: Record<string, unknown>): void {
