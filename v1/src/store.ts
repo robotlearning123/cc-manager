@@ -237,6 +237,63 @@ export class Store {
     return { total, byStatus, totalCost };
   }
 
+  getPerformanceMetrics(): {
+    totalTasks: number;
+    successCount: number;
+    failedCount: number;
+    timeoutCount: number;
+    avgDurationMs: number;
+    avgCostUsd: number;
+    totalCostUsd: number;
+    p50DurationMs: number;
+    p90DurationMs: number;
+  } {
+    const agg = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total_tasks,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+        SUM(CASE WHEN status = 'failed'  THEN 1 ELSE 0 END) AS failed_count,
+        SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout_count,
+        COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+        COALESCE(AVG(cost_usd), 0)    AS avg_cost_usd,
+        COALESCE(SUM(cost_usd), 0)    AS total_cost_usd
+      FROM tasks
+    `).get() as any;
+
+    const totalTasks: number = agg.total_tasks ?? 0;
+
+    let p50DurationMs = 0;
+    let p90DurationMs = 0;
+
+    if (totalTasks > 0) {
+      const p50Offset = Math.floor(totalTasks / 2);
+      const p90Offset = Math.min(totalTasks - 1, Math.floor(totalTasks * 0.9));
+
+      const p50Row = this.db.prepare(
+        "SELECT duration_ms FROM tasks ORDER BY duration_ms ASC LIMIT 1 OFFSET ?"
+      ).get(p50Offset) as any;
+
+      const p90Row = this.db.prepare(
+        "SELECT duration_ms FROM tasks ORDER BY duration_ms ASC LIMIT 1 OFFSET ?"
+      ).get(p90Offset) as any;
+
+      p50DurationMs = p50Row?.duration_ms ?? 0;
+      p90DurationMs = p90Row?.duration_ms ?? 0;
+    }
+
+    return {
+      totalTasks,
+      successCount: agg.success_count ?? 0,
+      failedCount: agg.failed_count ?? 0,
+      timeoutCount: agg.timeout_count ?? 0,
+      avgDurationMs: agg.avg_duration_ms ?? 0,
+      avgCostUsd: agg.avg_cost_usd ?? 0,
+      totalCostUsd: agg.total_cost_usd ?? 0,
+      p50DurationMs,
+      p90DurationMs,
+    };
+  }
+
   private rowToTask(row: any): Task {
     return {
       id: row.id,
