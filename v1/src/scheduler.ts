@@ -76,6 +76,28 @@ export class Scheduler {
     return true;
   }
 
+  requeue(taskId: string): Task | null {
+    const task = this.tasks.get(taskId) ?? this.store.get(taskId) ?? undefined;
+    if (!task) return null;
+    if (task.status !== "failed" && task.status !== "timeout") return null;
+
+    // Ensure the task is tracked in the in-memory map (may only be in store)
+    this.tasks.set(task.id, task);
+
+    task.status = "pending";
+    task.error = "";
+    task.retryCount += 1;
+    task.completedAt = undefined;
+
+    this.queue.push(task);
+    this.store.save(task);
+    this.onEvent?.({ type: "task_queued", taskId: task.id, queueSize: this.queue.length });
+    log("info", "task requeued via API", { taskId: task.id, retryCount: task.retryCount });
+    this.triggerDispatch();
+
+    return task;
+  }
+
   getAverageDuration(): number {
     const completed = [...this.tasks.values()].filter((t) => t.durationMs > 0);
     if (completed.length === 0) return 0;

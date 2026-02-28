@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Scheduler } from "./scheduler.js";
 import type { WorktreePool } from "./worktree-pool.js";
+import { log } from "./logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,6 +65,16 @@ export class WebServer {
 
     // Enable CORS for all routes (allows external frontends and tools to access the API)
     app.use(cors());
+
+    // Request logging middleware
+    app.use(async (c, next) => {
+      await next();
+      log("info", "request", {
+        method: c.req.method,
+        path: c.req.path,
+        status: c.res.status,
+      });
+    });
 
     // Dashboard
     app.get("/", (c) => {
@@ -591,7 +602,7 @@ export class WebServer {
 
   start(): void {
     serve({ fetch: this.app.fetch, port: this.port }, (info) => {
-      console.log(`[server] http://localhost:${info.port}`);
+      log("info", "[server] listening", { url: `http://localhost:${info.port}` });
     });
   }
 }
