@@ -232,6 +232,32 @@
   }
   .btn-cancel:hover { background: var(--st-failed-bg); }
 
+  /* ── Search bar ── */
+  .search-bar {
+    display: flex; gap: 8px; margin-bottom: 12px; align-items: center;
+  }
+  .search-bar input {
+    flex: 1;
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    padding: 7px 12px; border-radius: 6px;
+    font-family: inherit; font-size: 0.9em;
+    transition: border-color 0.15s;
+  }
+  .search-bar input:focus { border-color: var(--accent); outline: none; }
+  .search-bar input::placeholder { color: var(--text-muted); }
+  .btn-search {
+    background: var(--accent); color: #fff; border: none;
+    padding: 7px 16px; border-radius: 6px;
+    cursor: pointer; font-size: 0.88em; font-weight: 600; white-space: nowrap;
+  }
+  .btn-search:hover { opacity: 0.85; }
+  .btn-clear {
+    background: none; border: 1px solid var(--border); color: var(--text-muted);
+    padding: 7px 14px; border-radius: 6px;
+    cursor: pointer; font-size: 0.88em; white-space: nowrap;
+  }
+  .btn-clear:hover { border-color: var(--text-muted); color: var(--text); }
+
   /* ── Empty state ── */
   .empty-row td { text-align: center; padding: 40px; color: var(--text-muted); font-size: 0.9em; }
 
@@ -274,6 +300,65 @@
   }
   /* Output gets full height — no cap */
   .modal pre.full-output { max-height: none; }
+
+  /* ── Dashboard panels: Daily Stats & Recent Errors ── */
+  .dp {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 16px;
+  }
+  .dp-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .dp-title {
+    font-size: 0.8em; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .dp-hint { font-size: 0.7em; color: var(--text-muted); }
+
+  /* Bar chart */
+  .bc-bars {
+    display: flex; align-items: flex-end; gap: 6px;
+    height: 90px; border-bottom: 1px solid var(--border-sub);
+  }
+  .bc-bar {
+    flex: 1; border-radius: 3px 3px 0 0;
+    position: relative; overflow: hidden;
+    background: var(--st-failed-bg); min-height: 2px;
+  }
+  .bc-bar-ok {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--success); border-radius: 3px 3px 0 0;
+  }
+  .bc-meta { display: flex; gap: 6px; padding-top: 6px; }
+  .bc-col {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; gap: 1px;
+  }
+  .bc-day  { font-size: 0.7em;  color: var(--text-muted); }
+  .bc-cnt  { font-size: 0.68em; color: var(--text-muted); }
+  .bc-rate { font-size: 0.65em; }
+  .bc-rate.bc-ok   { color: var(--success); }
+  .bc-rate.bc-fail { color: var(--danger); }
+  .bc-rate.bc-na   { color: var(--text-muted); }
+  .bc-empty {
+    font-size: 0.85em; color: var(--text-muted);
+    text-align: center; padding: 16px 0; width: 100%;
+  }
+
+  /* Recent errors list */
+  .re-list { display: flex; flex-direction: column; gap: 5px; }
+  .re-item {
+    background: var(--bg); border: 1px solid var(--border-sub);
+    border-radius: 6px; padding: 8px 10px;
+    display: grid; grid-template-columns: auto 1fr auto;
+    gap: 4px 10px; align-items: center;
+  }
+  .re-item:hover { border-color: var(--danger); }
+  .re-id   { font-family: monospace; font-size: 0.75em; color: var(--accent); white-space: nowrap; }
+  .re-msg  { font-size: 0.8em; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .re-time { font-size: 0.72em; color: var(--text-muted); white-space: nowrap; }
+  .re-empty { font-size: 0.85em; color: var(--text-muted); text-align: center; padding: 12px 0; }
 </style>
 </head>
 <body>
@@ -334,6 +419,36 @@
   <div class="worker-grid" id="worker-grid"></div>
 </div>
 
+<!-- Daily Stats Panel -->
+<div class="dp">
+  <div class="dp-header">
+    <span class="dp-title">📊 Daily Stats</span>
+    <span class="dp-hint" id="daily-hint"></span>
+  </div>
+  <div class="bc-bars" id="daily-bars">
+    <div class="bc-empty">Loading…</div>
+  </div>
+  <div class="bc-meta" id="daily-meta"></div>
+</div>
+
+<!-- Recent Errors Panel -->
+<div class="dp">
+  <div class="dp-header">
+    <span class="dp-title">🚨 Recent Errors</span>
+    <span class="dp-hint" id="errors-hint"></span>
+  </div>
+  <div class="re-list" id="errors-list">
+    <div class="re-empty">Loading…</div>
+  </div>
+</div>
+
+<!-- Search bar -->
+<div class="search-bar">
+  <input type="text" id="search-input" placeholder="Search tasks…" />
+  <button class="btn-search" onclick="searchTasks()">Search</button>
+  <button class="btn-clear" id="btn-clear" onclick="clearSearch()" style="display:none">Clear</button>
+</div>
+
 <!-- Task table — newest first -->
 <table>
   <thead>
@@ -389,6 +504,8 @@ applyTheme(currentTheme);
 
 // ── Data ───────────────────────────────────────────────────────────────────
 let lastData = {};
+let searchActive = false;
+let searchResults = [];
 
 async function refresh() {
   try {
@@ -456,6 +573,10 @@ function render(stats, tasks, workers) {
   }
 
   // ── Tasks — sorted newest first ──
+  if (!searchActive) renderTaskTable(tasks);
+}
+
+function renderTaskTable(tasks) {
   const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const tEl = document.getElementById('tasks');
   if (sorted.length === 0) {
@@ -612,6 +733,120 @@ function tickTimers() {
 
 // Tick every second to update elapsed time in running-task rows
 setInterval(tickTimers, 1000);
+
+// ── Daily Stats ─────────────────────────────────────────────────────────────
+const DAY_ABBR = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+async function refreshDailyStats() {
+  try {
+    const raw  = await fetch('/api/stats/daily').then(r => r.json());
+    const days = Array.isArray(raw) ? raw : (raw.days ?? []);
+    renderDailyStats(days);
+    document.getElementById('daily-hint').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error('daily stats fetch failed:', e);
+    document.getElementById('daily-bars').innerHTML = '<div class="bc-empty">Failed to load</div>';
+    document.getElementById('daily-meta').innerHTML = '';
+  }
+}
+
+function renderDailyStats(days) {
+  const barsEl = document.getElementById('daily-bars');
+  const metaEl = document.getElementById('daily-meta');
+  if (!days.length) {
+    barsEl.innerHTML = '<div class="bc-empty">No data available</div>';
+    metaEl.innerHTML = '';
+    return;
+  }
+  const maxTotal = Math.max(...days.map(d => d.total ?? d.count ?? 0), 1);
+  barsEl.innerHTML = days.map(d => {
+    const total   = d.total ?? d.count ?? 0;
+    const success = d.success ?? d.succeeded ?? 0;
+    const hPct    = Math.max(Math.round((total / maxTotal) * 100), total > 0 ? 4 : 2);
+    const sPct    = total > 0 ? Math.round((success / total) * 100) : 0;
+    return `<div class="bc-bar" style="height:${hPct}%"><div class="bc-bar-ok" style="height:${sPct}%"></div></div>`;
+  }).join('');
+  metaEl.innerHTML = days.map(d => {
+    const total   = d.total ?? d.count ?? 0;
+    const success = d.success ?? d.succeeded ?? 0;
+    const date    = d.date ? new Date(d.date + 'T12:00:00') : null;
+    const dayName = date ? DAY_ABBR[date.getDay()] : '–';
+    const sucPct  = total > 0 ? Math.round((success / total) * 100) : -1;
+    const cls     = sucPct < 0 ? 'bc-na' : sucPct >= 80 ? 'bc-ok' : 'bc-fail';
+    const rate    = sucPct < 0 ? '–' : sucPct + '%';
+    return `<div class="bc-col">
+      <div class="bc-day">${esc(dayName)}</div>
+      <div class="bc-cnt">${total}</div>
+      <div class="bc-rate ${cls}">${rate}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Recent Errors ────────────────────────────────────────────────────────────
+async function refreshRecentErrors() {
+  try {
+    const raw    = await fetch('/api/tasks/errors').then(r => r.json());
+    const errors = Array.isArray(raw) ? raw : (raw.tasks ?? raw.errors ?? []);
+    renderRecentErrors(errors);
+    document.getElementById('errors-hint').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error('recent errors fetch failed:', e);
+    document.getElementById('errors-list').innerHTML = '<div class="re-empty">Failed to load</div>';
+  }
+}
+
+function renderRecentErrors(errors) {
+  const el = document.getElementById('errors-list');
+  if (!errors.length) {
+    el.innerHTML = '<div class="re-empty">No recent errors 🎉</div>';
+    return;
+  }
+  el.innerHTML = errors.map(err => {
+    const msgRaw  = err.error ?? err.errorMessage ?? '';
+    const preview = esc(msgRaw.slice(0, 100)) + (msgRaw.length > 100 ? '…' : '');
+    const ts      = err.createdAt    ? new Date(err.createdAt).toLocaleString()
+                  : err.completedAt  ? new Date(err.completedAt).toLocaleString()
+                  : '–';
+    return `<div class="re-item">
+      <code class="re-id">${esc(String(err.id ?? ''))}</code>
+      <div class="re-msg" title="${esc(msgRaw)}">${preview || '<em style="color:var(--text-muted)">no message</em>'}</div>
+      <div class="re-time">${ts}</div>
+    </div>`;
+  }).join('');
+}
+
+// Auto-refresh new panels every 30 s
+setInterval(refreshDailyStats,  30000);
+setInterval(refreshRecentErrors, 30000);
+refreshDailyStats();
+refreshRecentErrors();
+
+// ── Search ──────────────────────────────────────────────────────────────────
+async function searchTasks() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) { clearSearch(); return; }
+  try {
+    const results = await fetch('/api/tasks/search?q=' + encodeURIComponent(q)).then(r => r.json());
+    searchActive = true;
+    searchResults = Array.isArray(results) ? results : (results.tasks ?? []);
+    document.getElementById('btn-clear').style.display = '';
+    renderTaskTable(searchResults);
+  } catch(e) { console.error('search failed:', e); }
+}
+
+function clearSearch() {
+  searchActive = false;
+  searchResults = [];
+  document.getElementById('search-input').value = '';
+  document.getElementById('btn-clear').style.display = 'none';
+  if (lastData.tasks) renderTaskTable(lastData.tasks);
+}
+
+document.getElementById('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); searchTasks(); }
+});
 
 // ── SSE for real-time updates ──────────────────────────────────────────────
 function connectSSE() {
