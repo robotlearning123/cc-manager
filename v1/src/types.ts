@@ -24,6 +24,7 @@ export interface Task {
   dependsOn?: string;
   tags?: string[];
   webhookUrl?: string;
+  summary?: string;
 }
 
 export interface TaskEvent {

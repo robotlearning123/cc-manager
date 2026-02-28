@@ -9,7 +9,11 @@ export class AgentRunner {
   ) {}
 
   async run(task: Task, cwd: string, onEvent?: EventCallback): Promise<Task> {
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const { query } = await import("@anthropic-ai/claude-agent-sdk").catch(() => {
+      throw new Error(
+        "missing dependency: @anthropic-ai/claude-agent-sdk is not installed – run: npm install @anthropic-ai/claude-agent-sdk",
+      );
+    });
 
     task.status = "running";
     task.startedAt = new Date().toISOString();
@@ -55,7 +59,20 @@ When done, stage and commit your changes:
         },
       });
 
+      let messageCount = 0;
+
       for await (const msg of q) {
+        messageCount++;
+
+        if (messageCount % 10 === 0) {
+          onEvent?.({
+            type: "task_progress",
+            taskId: task.id,
+            messageCount,
+            elapsedMs: Date.now() - startMs,
+          });
+        }
+
         const evt: TaskEvent = {
           type: msg.type,
           timestamp: new Date().toISOString(),
@@ -80,6 +97,7 @@ When done, stage and commit your changes:
           if (msg.subtype === "success") {
             task.status = "success";
             task.output = msg.result ?? "";
+            task.summary = task.output.slice(-500);
           } else {
             task.status = "failed";
             task.error = msg.subtype ?? "unknown error";
@@ -90,11 +108,31 @@ When done, stage and commit your changes:
         task.events.push(evt);
         onEvent?.({ type: "task_event", taskId: task.id, event: evt });
       }
-    } catch (err: any) {
-      if ((task.status as string) !== "timeout") {
-        task.status = "failed";
+    } catch (err: unknown) {
+      const e = err as { name?: string; message?: string; code?: string };
+      const msg = e.message ?? String(err);
+
+      if (e.name === "AbortError") {
+        // Triggered by our timeout timer via abortController.abort()
+        task.status = "timeout";
+        task.error = `timeout: task exceeded ${task.timeout}s`;
+      } else {
+        if ((task.status as string) !== "timeout") {
+          task.status = "failed";
+        }
+        if (
+          e.code === "ECONNREFUSED" ||
+          e.code === "ENOTFOUND" ||
+          e.code === "ETIMEDOUT" ||
+          e.code === "ECONNRESET" ||
+          (e.name === "TypeError" && /fetch|network/i.test(msg))
+        ) {
+          task.error = `network: ${msg}`;
+        } else {
+          task.error = `sdk: ${msg}`;
+        }
       }
-      task.error = err.message ?? String(err);
+
       task.durationMs = Date.now() - startMs;
     } finally {
       if (timer) clearTimeout(timer);
