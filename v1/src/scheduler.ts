@@ -13,6 +13,8 @@ export class Scheduler {
   private running = false;
   private tasks = new Map<string, Task>();
   private totalBudgetLimit = 0;
+  private metricsInterval?: ReturnType<typeof setInterval>;
+  private dispatchResolve?: () => void;
 
   setTotalBudgetLimit(usd: number): void {
     this.totalBudgetLimit = usd;
@@ -29,12 +31,14 @@ export class Scheduler {
   start(): void {
     this.running = true;
     this.loop();
+    this.metricsInterval = setInterval(() => this.logMetrics(), 60_000);
     log("info", "scheduler started");
   }
 
   async stop(): Promise<void> {
     log("info", "scheduler stopping");
     this.running = false;
+    clearInterval(this.metricsInterval);
     // Wait for active workers
     while (this.activeWorkers.size > 0) {
       log("info", "waiting for workers", { active: this.activeWorkers.size });
@@ -50,6 +54,7 @@ export class Scheduler {
     this.store.save(task);
     this.onEvent?.({ type: "task_queued", taskId: task.id, queueSize: this.queue.length });
     log("info", "task queued", { taskId: task.id, queueSize: this.queue.length });
+    this.triggerDispatch();
     return task;
   }
 
@@ -94,10 +99,59 @@ export class Scheduler {
     };
   }
 
+  logMetrics(): void {
+    const stats = this.getStats();
+    const successCount = stats.byStatus["success"] ?? 0;
+    const successRate = stats.total > 0 ? successCount / stats.total : 0;
+    log("info", "scheduler metrics", {
+      totalTasks: stats.total,
+      successRate: Math.round(successRate * 10000) / 100, // percentage, 2 dp
+      avgDurationMs: Math.round(stats.avgDurationMs),
+      activeWorkers: stats.activeWorkers,
+      queueSize: stats.queueSize,
+      totalCostUsd: Math.round(stats.totalCost * 1e6) / 1e6,
+    });
+  }
+
+  /**
+   * Wake the dispatch loop early, cancelling any pending wait.
+   * Called when a new task is submitted or a worker is released.
+   */
+  private triggerDispatch(): void {
+    const resolve = this.dispatchResolve;
+    this.dispatchResolve = undefined;
+    resolve?.();
+  }
+
+  /**
+   * Sleep for up to `ms` milliseconds, but resolve immediately if
+   * triggerDispatch() is called before the timeout expires.
+   */
+  private waitForDispatch(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.dispatchResolve = undefined;
+        resolve();
+      }, ms);
+      this.dispatchResolve = () => {
+        clearTimeout(timer);
+        this.dispatchResolve = undefined;
+        resolve();
+      };
+    });
+  }
+
   private async loop(): Promise<void> {
     while (this.running) {
-      if (this.queue.length === 0 || this.pool.available === 0) {
-        await new Promise((r) => setTimeout(r, 500));
+      // Queue empty — nothing to dispatch; sleep long and wait for a submission.
+      if (this.queue.length === 0) {
+        await this.waitForDispatch(5_000);
+        continue;
+      }
+
+      // Tasks pending but no free workers — sleep short and wait for a release.
+      if (this.pool.available === 0) {
+        await this.waitForDispatch(1_000);
         continue;
       }
 
@@ -109,7 +163,7 @@ export class Scheduler {
             totalCost,
             totalBudgetLimit: this.totalBudgetLimit,
           });
-          await new Promise((r) => setTimeout(r, 1000));
+          await this.waitForDispatch(1_000);
           continue;
         }
       }
@@ -126,7 +180,7 @@ export class Scheduler {
         if (dep?.status !== "success") {
           log("info", "task waiting on dependency", { taskId: task.id, dependsOn: task.dependsOn });
           this.queue.push(task);
-          await new Promise((r) => setTimeout(r, 500));
+          await this.waitForDispatch(1_000);
           continue;
         }
       }
@@ -134,7 +188,7 @@ export class Scheduler {
       const worker = await this.pool.acquire();
       if (!worker) {
         this.queue.unshift(task);
-        await new Promise((r) => setTimeout(r, 1000));
+        await this.waitForDispatch(1_000);
         continue;
       }
 
@@ -180,6 +234,7 @@ export class Scheduler {
         log("info", "task retrying", { taskId: task.id, attempt: task.retryCount, maxRetries: task.maxRetries });
       }
       this.activeWorkers.delete(workerName);
+      this.triggerDispatch(); // wake the loop now that a worker slot is free
       this.store.save(task);
       if (!shouldRetry) {
         if (task.webhookUrl) {
@@ -205,6 +260,7 @@ export class Scheduler {
     if (shouldRetry) {
       this.queue.push(task);
       this.onEvent?.({ type: "task_queued", taskId: task.id, queueSize: this.queue.length });
+      this.triggerDispatch();
     }
   }
 }
