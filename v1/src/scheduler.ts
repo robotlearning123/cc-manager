@@ -68,6 +68,10 @@ export class Scheduler {
   }
 
   submit(prompt: string, opts?: { id?: string; timeout?: number; maxBudget?: number; priority?: import("./types.js").TaskPriority; dependsOn?: string; webhookUrl?: string; tags?: string[] }): Task {
+    if (prompt.length > 2000) {
+      log("warn", "prompt exceeds context budget, truncating", { originalLength: prompt.length });
+      prompt = prompt.slice(0, 2000);
+    }
     const task = createTask(prompt, opts);
     this.validateTask(task);
     this.tasks.set(task.id, task);
@@ -160,6 +164,13 @@ export class Scheduler {
         : 0;
 
     return { avgDuration, successRate, avgCost, timeoutRate };
+  }
+
+  getFailureContext(): string {
+    const patterns = this.store.getFailurePatterns(5);
+    if (patterns.length === 0) return "Recent failures: none";
+    const lines = patterns.map((p) => `- Error: ${p.error} | Prompt: ${p.promptSnippet}`);
+    return `Recent failures:\n${lines.join("\n")}`;
   }
 
   getStats() {
