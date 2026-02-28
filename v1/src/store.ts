@@ -126,6 +126,14 @@ export class Store {
     return rows.map((r) => this.rowToTask(r));
   }
 
+  search(query: string): Task[] {
+    const pattern = `%${query}%`;
+    const rows = this.db.prepare(
+      "SELECT * FROM tasks WHERE prompt LIKE ? OR output LIKE ? ORDER BY created_at DESC LIMIT 50"
+    ).all(pattern, pattern) as any[];
+    return rows.map((r) => this.rowToTask(r));
+  }
+
   stats(): { total: number; byStatus: Record<string, number>; totalCost: number } {
     const rows = this.db.prepare(
       "SELECT status, COUNT(*) as cnt, SUM(cost_usd) as cost FROM tasks GROUP BY status"
