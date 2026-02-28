@@ -7,6 +7,7 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Scheduler } from "./scheduler.js";
+import type { Store } from "./store.js";
 import type { WorktreePool } from "./worktree-pool.js";
 import { log } from "./logger.js";
 
@@ -60,6 +61,10 @@ export class WebServer {
     this._scheduler = scheduler;
   }
 
+  private get store(): Store {
+    return (this._scheduler as any).store as Store;
+  }
+
   private setupRoutes(): void {
     const app = this.app;
 
@@ -108,6 +113,12 @@ export class WebServer {
 
     // API: stats
     app.get("/api/stats", (c) => c.json(this._scheduler.getStats()));
+
+    // API: daily stats (7-day breakdown from store)
+    app.get("/api/stats/daily", (c) => {
+      const daily = this.store.getDailyStats();
+      return c.json(daily);
+    });
 
     // API: budget summary
     app.get("/api/budget", (c) => {
@@ -160,6 +171,12 @@ export class WebServer {
         tags: t.tags,
       }));
       return c.json(result);
+    });
+
+    // API: recent task errors (failed / timeout)
+    app.get("/api/tasks/errors", (c) => {
+      const errors = this.store.getRecentErrors(10);
+      return c.json(errors);
     });
 
     // API: task detail
@@ -298,6 +315,17 @@ export class WebServer {
         webhookUrl: body.webhookUrl as string | undefined,
       });
       return c.json({ id: task.id, status: task.status }, 201);
+    });
+
+    // API: cleanup old tasks
+    app.delete("/api/tasks/cleanup", (c) => {
+      const daysParam = c.req.query("days");
+      const days = daysParam !== undefined ? parseInt(daysParam, 10) : 30;
+      if (isNaN(days) || days <= 0) {
+        return c.json({ error: "days must be a positive integer" }, 400);
+      }
+      const deleted = this.store.deleteOlderThan(days);
+      return c.json({ deleted });
     });
 
     // API: cancel task
