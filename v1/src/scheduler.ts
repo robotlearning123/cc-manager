@@ -99,6 +99,7 @@ export class Scheduler {
   }
 
   private async executeAndRelease(task: Task, workerName: string, workerPath: string): Promise<void> {
+    let shouldRetry = false;
     try {
       console.log(`[scheduler] ${task.id} → ${workerName}`);
       await this.runner.run(task, workerPath, this.onEvent);
@@ -117,9 +118,24 @@ export class Scheduler {
       task.completedAt = new Date().toISOString();
       await this.pool.release(workerName, false);
     } finally {
+      // Retry logic: re-queue failed tasks (not timeout/cancelled) up to maxRetries times
+      if (task.status === "failed" && task.retryCount < task.maxRetries) {
+        shouldRetry = true;
+        task.retryCount++;
+        task.status = "pending";
+        task.error = "";
+        task.completedAt = undefined;
+        console.log(`[scheduler] retrying: ${task.id} (attempt ${task.retryCount}/${task.maxRetries})`);
+      }
       this.activeWorkers.delete(workerName);
       this.store.save(task);
-      this.onEvent?.({ type: "task_final", taskId: task.id, status: task.status });
+      if (!shouldRetry) {
+        this.onEvent?.({ type: "task_final", taskId: task.id, status: task.status });
+      }
+    }
+    if (shouldRetry) {
+      this.queue.push(task);
+      this.onEvent?.({ type: "task_queued", taskId: task.id, queueSize: this.queue.length });
     }
   }
 }

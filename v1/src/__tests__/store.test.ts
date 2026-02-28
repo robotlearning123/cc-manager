@@ -40,6 +40,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     tokenOutput: 0,
     durationMs: 0,
     retryCount: 0,
+    maxRetries: 2,
     ...overrides,
   };
 }
