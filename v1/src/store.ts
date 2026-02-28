@@ -34,7 +34,10 @@ export class Store {
         retry_count INTEGER DEFAULT 0,
         max_retries INTEGER DEFAULT 2,
         priority TEXT DEFAULT 'normal',
-        tags TEXT DEFAULT '[]'
+        tags TEXT DEFAULT '[]',
+        depends_on TEXT,
+        webhook_url TEXT,
+        summary TEXT
       )
     `);
     // Add max_retries column to existing databases that predate this migration
@@ -52,6 +55,24 @@ export class Store {
     // Add tags column to existing databases that predate this migration
     try {
       this.db.exec("ALTER TABLE tasks ADD COLUMN tags TEXT DEFAULT '[]'");
+    } catch {
+      // Column already exists — safe to ignore
+    }
+    // Add depends_on column to existing databases that predate this migration
+    try {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN depends_on TEXT");
+    } catch {
+      // Column already exists — safe to ignore
+    }
+    // Add webhook_url column to existing databases that predate this migration
+    try {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN webhook_url TEXT");
+    } catch {
+      // Column already exists — safe to ignore
+    }
+    // Add summary column to existing databases that predate this migration
+    try {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN summary TEXT");
     } catch {
       // Column already exists — safe to ignore
     }
@@ -81,8 +102,9 @@ export class Store {
       INSERT OR REPLACE INTO tasks
       (id, prompt, status, worktree, output, error, events, created_at,
        started_at, completed_at, timeout, max_budget, cost_usd,
-       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags,
+       depends_on, webhook_url, summary)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.id, task.prompt, task.status, task.worktree ?? null,
       task.output, task.error, JSON.stringify(task.events),
@@ -91,6 +113,7 @@ export class Store {
       task.tokenInput, task.tokenOutput, task.durationMs, task.retryCount, task.maxRetries,
       task.priority ?? "normal",
       JSON.stringify(task.tags ?? []),
+      task.dependsOn ?? null, task.webhookUrl ?? null, task.summary ?? null,
     );
   }
 
@@ -104,8 +127,9 @@ export class Store {
       INSERT OR REPLACE INTO tasks
       (id, prompt, status, worktree, output, error, events, created_at,
        started_at, completed_at, timeout, max_budget, cost_usd,
-       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags,
+       depends_on, webhook_url, summary)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const runAll = this.db.transaction((batch: Task[]) => {
       for (const task of batch) {
@@ -117,6 +141,7 @@ export class Store {
           task.tokenInput, task.tokenOutput, task.durationMs, task.retryCount, task.maxRetries,
           task.priority ?? "normal",
           JSON.stringify(task.tags ?? []),
+          task.dependsOn ?? null, task.webhookUrl ?? null, task.summary ?? null,
         );
       }
     });
@@ -137,8 +162,9 @@ export class Store {
       INSERT OR REPLACE INTO tasks
       (id, prompt, status, worktree, output, error, events, created_at,
        started_at, completed_at, timeout, max_budget, cost_usd,
-       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags,
+       depends_on, webhook_url, summary)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.transaction(() => {
       for (const task of tasks) {
@@ -150,6 +176,7 @@ export class Store {
           task.tokenInput, task.tokenOutput, task.durationMs, task.retryCount, task.maxRetries,
           task.priority ?? "normal",
           JSON.stringify(task.tags ?? []),
+          task.dependsOn ?? null, task.webhookUrl ?? null, task.summary ?? null,
         );
       }
     });
@@ -181,6 +208,9 @@ export class Store {
       maxRetries:  { col: "max_retries" },
       priority:    { col: "priority" },
       tags:        { col: "tags",        serialize: (v) => JSON.stringify(v) },
+      dependsOn:   { col: "depends_on" },
+      webhookUrl:  { col: "webhook_url" },
+      summary:     { col: "summary" },
     };
 
     const setClauses: string[] = [];
@@ -325,6 +355,9 @@ export class Store {
       maxRetries: row.max_retries ?? 2,
       priority: (row.priority ?? "normal") as import("./types.js").TaskPriority,
       tags: JSON.parse(row.tags || "[]"),
+      dependsOn: row.depends_on ?? undefined,
+      webhookUrl: row.webhook_url ?? undefined,
+      summary: row.summary ?? undefined,
     };
   }
 
