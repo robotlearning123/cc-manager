@@ -361,7 +361,11 @@ export class WebServer {
 
     // API: cancel task
     app.delete("/api/tasks/:id", (c) => {
-      const ok = this._scheduler.cancel(c.req.param("id"));
+      const id = c.req.param("id");
+      const task = this._scheduler.getTask(id);
+      if (!task) return c.json({ error: "task not found" }, 404);
+      if (task.status === "running") return c.json({ error: "cannot cancel running task" }, 409);
+      const ok = this._scheduler.cancel(id);
       return ok ? c.json({ ok: true }) : c.json({ error: "cannot cancel" }, 400);
     });
 
