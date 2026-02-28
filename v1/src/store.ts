@@ -55,6 +55,13 @@ export class Store {
     } catch {
       // Column already exists — safe to ignore
     }
+    // Indexes for common query patterns
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)"
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at)"
+    );
   }
 
   save(task: Task): void {
@@ -73,6 +80,35 @@ export class Store {
       task.priority ?? "normal",
       JSON.stringify(task.tags ?? []),
     );
+  }
+
+  /**
+   * Update multiple tasks in a single transaction using a prepared statement.
+   * Significantly faster than calling save() in a loop when many tasks complete
+   * near-simultaneously, because SQLite only flushes WAL once per transaction.
+   */
+  updateBatch(tasks: Task[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO tasks
+      (id, prompt, status, worktree, output, error, events, created_at,
+       started_at, completed_at, timeout, max_budget, cost_usd,
+       token_input, token_output, duration_ms, retry_count, max_retries, priority, tags)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const runAll = this.db.transaction((batch: Task[]) => {
+      for (const task of batch) {
+        stmt.run(
+          task.id, task.prompt, task.status, task.worktree ?? null,
+          task.output, task.error, JSON.stringify(task.events),
+          task.createdAt, task.startedAt ?? null, task.completedAt ?? null,
+          task.timeout, task.maxBudget, task.costUsd,
+          task.tokenInput, task.tokenOutput, task.durationMs, task.retryCount, task.maxRetries,
+          task.priority ?? "normal",
+          JSON.stringify(task.tags ?? []),
+        );
+      }
+    });
+    runAll(tasks);
   }
 
   get(id: string): Task | null {
