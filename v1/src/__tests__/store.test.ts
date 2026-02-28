@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { Store } from "../store.ts";
-import type { Task } from "../types.ts";
+import { Store } from "../store.js";
+import type { Task } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
