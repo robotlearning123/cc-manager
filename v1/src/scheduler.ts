@@ -14,6 +14,7 @@ export class Scheduler {
   private tasks = new Map<string, Task>();
   private totalBudgetLimit = 0;
   private metricsInterval?: ReturnType<typeof setInterval>;
+  private recoveryInterval?: ReturnType<typeof setInterval>;
   private progressIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private dispatchResolve?: () => void;
 
@@ -33,6 +34,7 @@ export class Scheduler {
     this.running = true;
     this.loop();
     this.metricsInterval = setInterval(() => this.logMetrics(), 60_000);
+    this.recoveryInterval = setInterval(() => void this.recoverStaleWorkers(), 60_000);
     log("info", "scheduler started");
   }
 
@@ -40,6 +42,7 @@ export class Scheduler {
     log("info", "scheduler stopping");
     this.running = false;
     clearInterval(this.metricsInterval);
+    clearInterval(this.recoveryInterval);
     // Wait for active workers
     while (this.activeWorkers.size > 0) {
       log("info", "waiting for workers", { active: this.activeWorkers.size });
@@ -120,6 +123,55 @@ export class Scheduler {
       estimatedWaitMs: (avgDurationMs * queueSize) / Math.max(activeWorkers, 1),
       totalBudgetLimit: this.totalBudgetLimit,
     };
+  }
+
+  /**
+   * Scan all active workers for tasks that have exceeded their timeout plus a
+   * 30-second grace period.  Any stuck task is forcefully marked as "timeout",
+   * its worker is released, and a task_final event is emitted so downstream
+   * consumers are notified.  Called automatically every 60 seconds.
+   */
+  private async recoverStaleWorkers(): Promise<void> {
+    const now = Date.now();
+    for (const [, task] of this.tasks) {
+      if (task.status !== "running") continue;
+      if (!task.startedAt) continue;
+
+      const startedAt = new Date(task.startedAt).getTime();
+      const gracePeriodMs = (task.timeout + 30) * 1_000;
+      if (now - startedAt < gracePeriodMs) continue;
+
+      const workerName = task.worktree;
+      if (!workerName) continue;
+
+      log("warn", "recovering stale worker", {
+        taskId: task.id,
+        workerName,
+        elapsedMs: now - startedAt,
+        timeoutS: task.timeout,
+      });
+
+      // Mark the task as timed out
+      task.status = "timeout";
+      task.error = "Task exceeded timeout + grace period and was forcefully recovered";
+      task.completedAt = new Date().toISOString();
+
+      // Clear any outstanding progress-reporting interval for this task
+      const interval = this.progressIntervals.get(task.id);
+      if (interval !== undefined) {
+        clearInterval(interval);
+        this.progressIntervals.delete(task.id);
+      }
+
+      // Release the worker back to the pool without merging
+      this.activeWorkers.delete(workerName);
+      await this.pool.release(workerName, false);
+
+      // Persist, notify, and wake the dispatch loop
+      this.store.save(task);
+      this.onEvent?.({ type: "task_final", taskId: task.id, status: task.status });
+      this.triggerDispatch();
+    }
   }
 
   logMetrics(): void {
