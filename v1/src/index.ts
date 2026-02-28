@@ -6,9 +6,12 @@ import { Store } from "./store.js";
 import { Scheduler } from "./scheduler.js";
 import { WebServer } from "./server.js";
 
+const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
 const program = new Command()
   .name("cc-manager")
   .description("Claude Code multi-agent orchestrator")
+  .version(version)
   .requiredOption("--repo <path>", "Git repository path")
   .option("--workers <n>", "Number of parallel workers", "10")
   .option("--port <n>", "HTTP server port", "8080")
@@ -81,10 +84,16 @@ async function main() {
   console.log("");
 
   const shutdown = async () => {
-    console.log("\nShutting down...");
-    await scheduler.stop();
-    store.close();
-    process.exit(0);
+    console.log("shutting down gracefully");
+    try {
+      await scheduler.stop();
+      console.log("scheduler stopped");
+      store.close();
+      process.exit(0);
+    } catch (err) {
+      console.error(err);
+      process.exit(1);
+    }
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
