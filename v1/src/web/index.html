@@ -1,58 +1,234 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CC-Manager</title>
+<script>
+  // Apply saved theme immediately to avoid flash
+  (function() {
+    var t = localStorage.getItem('cc-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 <style>
+  /* ── Theme variables ── */
+  :root {
+    --bg:          #0d1117;
+    --bg-card:     #161b22;
+    --bg-input:    #0d1117;
+    --border:      #30363d;
+    --border-sub:  #21262d;
+    --text:        #c9d1d9;
+    --text-muted:  #8b949e;
+    --accent:      #58a6ff;
+    --success:     #3fb950;
+    --danger:      #f85149;
+    --warning:     #d29922;
+    --shadow:      rgba(0,0,0,0.4);
+    --worker-idle-bg: #1a3a1a; --worker-idle-fg: #3fb950; --worker-idle-border: #238636;
+    --worker-busy-bg: #1f3a5f; --worker-busy-fg: #58a6ff; --worker-busy-border: #1f6feb;
+    --st-pending-bg: #30363d;  --st-pending-fg: #8b949e;
+    --st-running-bg: #1f3a5f;  --st-running-fg: #58a6ff;
+    --st-success-bg: #1a3a1a;  --st-success-fg: #3fb950;
+    --st-failed-bg:  #3d1a1a;  --st-failed-fg:  #f85149;
+    --st-timeout-bg: #3d2e1a;  --st-timeout-fg: #d29922;
+    --st-cancel-bg:  #30363d;  --st-cancel-fg:  #8b949e;
+  }
+  [data-theme="light"] {
+    --bg:          #f6f8fa;
+    --bg-card:     #ffffff;
+    --bg-input:    #ffffff;
+    --border:      #d0d7de;
+    --border-sub:  #d8dee4;
+    --text:        #24292f;
+    --text-muted:  #57606a;
+    --accent:      #0969da;
+    --success:     #1a7f37;
+    --danger:      #d1242f;
+    --warning:     #9a6700;
+    --shadow:      rgba(0,0,0,0.12);
+    --worker-idle-bg: #dafbe1; --worker-idle-fg: #1a7f37; --worker-idle-border: #1a7f37;
+    --worker-busy-bg: #ddf4ff; --worker-busy-fg: #0969da; --worker-busy-border: #0969da;
+    --st-pending-bg: #eaeef2;  --st-pending-fg: #57606a;
+    --st-running-bg: #ddf4ff;  --st-running-fg: #0969da;
+    --st-success-bg: #dafbe1;  --st-success-fg: #1a7f37;
+    --st-failed-bg:  #ffebe9;  --st-failed-fg:  #d1242f;
+    --st-timeout-bg: #fff8c5;  --st-timeout-fg: #9a6700;
+    --st-cancel-bg:  #eaeef2;  --st-cancel-fg:  #57606a;
+  }
+
+  /* ── Reset & base ── */
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
-  h1 { font-size: 1.4em; margin-bottom: 20px; color: #58a6ff; display: flex; align-items: center; gap: 10px; }
-  h1 .dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; animation: pulse 2s infinite; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 20px;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  /* ── Header ── */
+  h1 {
+    font-size: 1.4em; margin-bottom: 20px; color: var(--accent);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h1 .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success); animation: pulse 2s infinite; flex-shrink: 0;
+  }
+  h1 .spacer { flex: 1; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
-  .card .label { font-size: 0.75em; color: #8b949e; text-transform: uppercase; }
+
+  /* ── Theme toggle button ── */
+  .theme-toggle {
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text); padding: 5px 12px; border-radius: 6px;
+    cursor: pointer; font-size: 0.82em; display: flex; align-items: center; gap: 5px;
+    transition: border-color 0.15s;
+  }
+  .theme-toggle:hover { border-color: var(--accent); }
+
+  /* ── Stats grid ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin-bottom: 14px;
+  }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card .label { font-size: 0.75em; color: var(--text-muted); text-transform: uppercase; }
   .card .value { font-size: 1.8em; font-weight: 600; margin-top: 4px; }
-  .submit { display: flex; gap: 8px; margin-bottom: 24px; }
-  .submit textarea { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 10px; border-radius: 6px; resize: vertical; min-height: 60px; font-family: inherit; font-size: 0.9em; }
-  .submit textarea:focus { border-color: #58a6ff; outline: none; }
-  .submit button { background: #238636; color: #fff; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-weight: 600; white-space: nowrap; }
-  .submit button:hover { background: #2ea043; }
-  .workers { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
-  .worker { padding: 6px 12px; border-radius: 6px; font-size: 0.85em; background: #1a3a1a; color: #3fb950; border: 1px solid #238636; }
-  .worker.busy { background: #1f3a5f; color: #58a6ff; border-color: #1f6feb; animation: pulse 2s infinite; }
+
+  /* ── Cost summary bar ── */
+  .cost-bar {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 18px;
+    margin-bottom: 22px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 28px;
+  }
+  .cost-bar-title {
+    font-size: 0.78em; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .cost-item { display: flex; flex-direction: column; gap: 1px; }
+  .cost-item .ci-label { font-size: 0.72em; color: var(--text-muted); text-transform: uppercase; }
+  .cost-item .ci-value { font-size: 1.05em; font-weight: 600; color: var(--accent); }
+
+  /* ── Workers ── */
+  .workers { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+  .worker {
+    padding: 5px 12px; border-radius: 6px; font-size: 0.85em;
+    background: var(--worker-idle-bg); color: var(--worker-idle-fg);
+    border: 1px solid var(--worker-idle-border);
+  }
+  .worker.busy {
+    background: var(--worker-busy-bg); color: var(--worker-busy-fg);
+    border-color: var(--worker-busy-border); animation: pulse 2s infinite;
+  }
+
+  /* ── Submit form ── */
+  .submit { display: flex; gap: 8px; margin-bottom: 22px; align-items: flex-start; }
+  .submit textarea {
+    flex: 1;
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 12px; border-radius: 6px;
+    resize: none; overflow-y: hidden;
+    min-height: 40px; max-height: 280px;
+    font-family: inherit; font-size: 0.9em; line-height: 1.5;
+    transition: border-color 0.15s;
+  }
+  .submit textarea:focus { border-color: var(--accent); outline: none; }
+  .submit-col { display: flex; flex-direction: column; gap: 5px; align-items: center; }
+  .submit-col button {
+    background: #238636; color: #fff; border: none;
+    padding: 9px 22px; border-radius: 6px;
+    cursor: pointer; font-weight: 600; white-space: nowrap;
+  }
+  .submit-col button:hover { background: #2ea043; }
+  .submit-hint { font-size: 0.71em; color: var(--text-muted); }
+
+  /* ── Table ── */
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; font-size: 0.9em; }
-  th { color: #8b949e; font-size: 0.75em; text-transform: uppercase; }
-  .status { padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; display: inline-block; }
-  .status-pending { background: #30363d; color: #8b949e; }
-  .status-running { background: #1f3a5f; color: #58a6ff; }
-  .status-success { background: #1a3a1a; color: #3fb950; }
-  .status-failed { background: #3d1a1a; color: #f85149; }
-  .status-timeout { background: #3d2e1a; color: #d29922; }
-  .status-cancelled { background: #30363d; color: #8b949e; }
-  .btn-cancel { background: none; border: 1px solid #f85149; color: #f85149; padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
-  .btn-cancel:hover { background: #3d1a1a; }
-  .btn-view { background: none; border: 1px solid #58a6ff; color: #58a6ff; padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; margin-right: 4px; }
-  .btn-view:hover { background: #1f3a5f; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border-sub); font-size: 0.9em; }
+  th { color: var(--text-muted); font-size: 0.75em; text-transform: uppercase; }
+  tbody tr:hover td { background: var(--bg-card); }
   .prompt-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Modal */
-  .modal-bg { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 100; }
+
+  /* ── Status badges ── */
+  .status { padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; display: inline-block; }
+  .status-pending   { background: var(--st-pending-bg);  color: var(--st-pending-fg); }
+  .status-running   { background: var(--st-running-bg);  color: var(--st-running-fg); }
+  .status-success   { background: var(--st-success-bg);  color: var(--st-success-fg); }
+  .status-failed    { background: var(--st-failed-bg);   color: var(--st-failed-fg); }
+  .status-timeout   { background: var(--st-timeout-bg);  color: var(--st-timeout-fg); }
+  .status-cancelled { background: var(--st-cancel-bg);   color: var(--st-cancel-fg); }
+
+  /* ── Action buttons ── */
+  .btn-view {
+    background: none; border: 1px solid var(--accent); color: var(--accent);
+    padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; margin-right: 4px;
+  }
+  .btn-view:hover { background: var(--worker-busy-bg); }
+  .btn-cancel {
+    background: none; border: 1px solid var(--danger); color: var(--danger);
+    padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em;
+  }
+  .btn-cancel:hover { background: var(--st-failed-bg); }
+
+  /* ── Empty state ── */
+  .empty-row td { text-align: center; padding: 40px; color: var(--text-muted); font-size: 0.9em; }
+
+  /* ── Modal ── */
+  .modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65);
+    display: none; justify-content: center; align-items: center;
+    z-index: 100; padding: 20px;
+  }
   .modal-bg.show { display: flex; }
-  .modal { background: #161b22; border: 1px solid #30363d; border-radius: 12px; width: 90%; max-width: 700px; max-height: 80vh; overflow: auto; padding: 24px; }
-  .modal h2 { color: #58a6ff; margin-bottom: 16px; font-size: 1.1em; }
-  .modal .close { float: right; background: none; border: none; color: #8b949e; font-size: 1.5em; cursor: pointer; }
-  .modal pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-size: 0.85em; white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow: auto; }
-  .modal .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; font-size: 0.85em; }
-  .modal .meta span { color: #8b949e; }
-  .section-title { color: #8b949e; font-size: 0.75em; text-transform: uppercase; margin: 16px 0 8px 0; }
+  .modal {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; width: 100%; max-width: 780px;
+    max-height: 88vh; overflow: auto;
+    padding: 24px;
+    box-shadow: 0 12px 40px var(--shadow);
+  }
+  .modal-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .modal-header h2 { color: var(--accent); font-size: 1.1em; flex: 1; }
+  .modal .close {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 1.5em; cursor: pointer; line-height: 1; padding: 0 4px;
+  }
+  .modal .close:hover { color: var(--text); }
+  .modal .meta {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 8px; margin-bottom: 16px; font-size: 0.85em;
+  }
+  .modal .meta span { color: var(--text-muted); }
+  .section-title {
+    color: var(--text-muted); font-size: 0.75em;
+    text-transform: uppercase; margin: 16px 0 8px 0;
+  }
+  .modal pre {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px;
+    font-size: 0.85em; white-space: pre-wrap; word-wrap: break-word;
+    color: var(--text); max-height: 380px; overflow: auto;
+  }
+  /* Output gets full height — no cap */
+  .modal pre.full-output { max-height: none; }
 </style>
 </head>
 <body>
-<h1><span class="dot"></span> CC-Manager</h1>
 
-<div class="grid" id="stats">
+<h1>
+  <span class="dot"></span>
+  CC-Manager
+  <span class="spacer"></span>
+  <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">☀️ Light</button>
+</h1>
+
+<!-- Stats -->
+<div class="grid">
   <div class="card"><div class="label">Queue</div><div class="value" id="s-queue">0</div></div>
   <div class="card"><div class="label">Running</div><div class="value" id="s-running">0</div></div>
   <div class="card"><div class="label">Success</div><div class="value" id="s-success">0</div></div>
@@ -61,36 +237,93 @@
   <div class="card"><div class="label">Cost (USD)</div><div class="value" id="s-cost">$0</div></div>
 </div>
 
-<div class="workers" id="workers"></div>
-
-<div class="submit">
-  <textarea id="prompt" placeholder="Enter task prompt..." rows="2"></textarea>
-  <button onclick="submitTask()">Submit</button>
+<!-- Cost Summary Bar -->
+<div class="cost-bar">
+  <span class="cost-bar-title">💰 Cost Summary</span>
+  <div class="cost-item">
+    <div class="ci-label">Total Spend</div>
+    <div class="ci-value" id="cs-total">$0.0000</div>
+  </div>
+  <div class="cost-item">
+    <div class="ci-label">Avg / Task</div>
+    <div class="ci-value" id="cs-avg">$0.0000</div>
+  </div>
+  <div class="cost-item">
+    <div class="ci-label">Billed Tasks</div>
+    <div class="ci-value" id="cs-count">0</div>
+  </div>
+  <div class="cost-item">
+    <div class="ci-label">Highest Single</div>
+    <div class="ci-value" id="cs-max">$0.0000</div>
+  </div>
 </div>
 
+<!-- Workers -->
+<div class="workers" id="workers"></div>
+
+<!-- Submit -->
+<div class="submit">
+  <textarea id="prompt" placeholder="Enter task prompt… (Ctrl+Enter to submit)" rows="1"></textarea>
+  <div class="submit-col">
+    <button onclick="submitTask()">Submit</button>
+    <span class="submit-hint">Ctrl+Enter</span>
+  </div>
+</div>
+
+<!-- Task table — newest first -->
 <table>
-  <thead><tr><th>ID</th><th>Prompt</th><th>Status</th><th>Worker</th><th>Cost</th><th>Duration</th><th>Actions</th></tr></thead>
+  <thead>
+    <tr>
+      <th>ID</th><th>Prompt</th><th>Status</th><th>Worker</th>
+      <th>Cost</th><th>Duration</th><th>Actions</th>
+    </tr>
+  </thead>
   <tbody id="tasks"></tbody>
 </table>
 
 <!-- Task Detail Modal -->
 <div class="modal-bg" id="modal" onclick="if(event.target===this)closeModal()">
   <div class="modal">
-    <button class="close" onclick="closeModal()">&times;</button>
-    <h2 id="modal-title">Task Detail</h2>
+    <div class="modal-header">
+      <h2 id="modal-title">Task Detail</h2>
+      <button class="close" onclick="closeModal()">&times;</button>
+    </div>
     <div class="meta" id="modal-meta"></div>
+
     <div class="section-title">Prompt</div>
     <pre id="modal-prompt"></pre>
-    <div class="section-title">Output</div>
-    <pre id="modal-output"></pre>
+
+    <div id="modal-output-section">
+      <div class="section-title">Output</div>
+      <pre id="modal-output" class="full-output"></pre>
+    </div>
+
     <div id="modal-error-section" style="display:none">
       <div class="section-title">Error</div>
-      <pre id="modal-error" style="color:#f85149"></pre>
+      <pre id="modal-error" style="color:var(--danger)"></pre>
     </div>
   </div>
 </div>
 
 <script>
+// ── Theme ──────────────────────────────────────────────────────────────────
+let currentTheme = localStorage.getItem('cc-theme') || 'dark';
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('theme-btn').textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  currentTheme = theme;
+  localStorage.setItem('cc-theme', theme);
+}
+
+function toggleTheme() {
+  applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+}
+
+// Sync button label on load (theme was already applied by inline script)
+applyTheme(currentTheme);
+
+// ── Data ───────────────────────────────────────────────────────────────────
 let lastData = {};
 
 async function refresh() {
@@ -106,22 +339,39 @@ async function refresh() {
 }
 
 function render(stats, tasks, workers) {
-  document.getElementById('s-total').textContent = stats.total;
+  // ── Stats cards ──
+  document.getElementById('s-total').textContent   = stats.total ?? 0;
   document.getElementById('s-success').textContent = stats.byStatus?.success ?? 0;
-  document.getElementById('s-failed').textContent = (stats.byStatus?.failed ?? 0) + (stats.byStatus?.timeout ?? 0);
-  document.getElementById('s-running').textContent = stats.activeWorkers;
-  document.getElementById('s-queue').textContent = stats.queueSize;
-  document.getElementById('s-cost').textContent = '$' + (stats.totalCost ?? 0).toFixed(2);
+  document.getElementById('s-failed').textContent  = (stats.byStatus?.failed ?? 0) + (stats.byStatus?.timeout ?? 0);
+  document.getElementById('s-running').textContent = stats.activeWorkers ?? 0;
+  document.getElementById('s-queue').textContent   = stats.queueSize ?? 0;
+  document.getElementById('s-cost').textContent    = '$' + (stats.totalCost ?? 0).toFixed(2);
 
+  // ── Cost summary ──
+  const billedTasks = tasks.filter(t => (t.costUsd ?? 0) > 0);
+  const totalCost   = stats.totalCost ?? 0;
+  const avgCost     = billedTasks.length > 0 ? totalCost / billedTasks.length : 0;
+  const maxCost     = billedTasks.length > 0 ? Math.max(...billedTasks.map(t => t.costUsd ?? 0)) : 0;
+  document.getElementById('cs-total').textContent = '$' + totalCost.toFixed(4);
+  document.getElementById('cs-avg').textContent   = '$' + avgCost.toFixed(4);
+  document.getElementById('cs-count').textContent = billedTasks.length;
+  document.getElementById('cs-max').textContent   = '$' + maxCost.toFixed(4);
+
+  // ── Workers ──
   const wEl = document.getElementById('workers');
   wEl.innerHTML = workers.map(w =>
-    `<div class="worker ${w.busy ? 'busy' : ''}">${w.name}${w.currentTask ? ': ' + w.currentTask : ''}</div>`
+    `<div class="worker ${w.busy ? 'busy' : ''}">${esc(w.name)}${w.currentTask ? ': ' + esc(w.currentTask) : ''}</div>`
   ).join('');
 
+  // ── Tasks — sorted newest first ──
+  const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const tEl = document.getElementById('tasks');
-  tEl.innerHTML = tasks.map(t => {
-    const actions = [];
-    actions.push(`<button class="btn-view" onclick="viewTask('${t.id}')">View</button>`);
+  if (sorted.length === 0) {
+    tEl.innerHTML = '<tr class="empty-row"><td colspan="7">No tasks yet. Submit a prompt above to get started.</td></tr>';
+    return;
+  }
+  tEl.innerHTML = sorted.map(t => {
+    const actions = [`<button class="btn-view" onclick="viewTask('${t.id}')">View</button>`];
     if (t.status === 'pending') {
       actions.push(`<button class="btn-cancel" onclick="cancelTask('${t.id}')">Cancel</button>`);
     }
@@ -138,9 +388,11 @@ function render(stats, tasks, workers) {
 }
 
 function esc(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Task actions ───────────────────────────────────────────────────────────
 async function submitTask() {
   const el = document.getElementById('prompt');
   const prompt = el.value.trim();
@@ -151,6 +403,7 @@ async function submitTask() {
     body: JSON.stringify({ prompt }),
   });
   el.value = '';
+  autoResize(el);
   refresh();
 }
 
@@ -162,19 +415,36 @@ async function cancelTask(id) {
 async function viewTask(id) {
   const task = await fetch('/api/tasks/' + id).then(r => r.json());
   if (task.error === 'not found') return;
+
   document.getElementById('modal-title').textContent = 'Task ' + task.id;
   document.getElementById('modal-meta').innerHTML = `
     <div><span>Status:</span> <span class="status status-${task.status}">${task.status}</span></div>
     <div><span>Worker:</span> ${task.worktree ?? '-'}</div>
     <div><span>Cost:</span> $${(task.costUsd ?? 0).toFixed(4)}</div>
     <div><span>Duration:</span> ${task.durationMs ? (task.durationMs/1000).toFixed(1)+'s' : '-'}</div>
-    <div><span>Tokens In:</span> ${task.tokenInput?.toLocaleString() ?? 0}</div>
-    <div><span>Tokens Out:</span> ${task.tokenOutput?.toLocaleString() ?? 0}</div>
+    <div><span>Tokens In:</span> ${(task.tokenInput ?? 0).toLocaleString()}</div>
+    <div><span>Tokens Out:</span> ${(task.tokenOutput ?? 0).toLocaleString()}</div>
     <div><span>Created:</span> ${new Date(task.createdAt).toLocaleString()}</div>
     <div><span>Completed:</span> ${task.completedAt ? new Date(task.completedAt).toLocaleString() : '-'}</div>
   `;
-  document.getElementById('modal-prompt').textContent = task.prompt;
-  document.getElementById('modal-output').textContent = task.output || '(no output yet)';
+
+  document.getElementById('modal-prompt').textContent = task.prompt ?? '';
+
+  // Output — show full text, no height cap
+  const outputSection = document.getElementById('modal-output-section');
+  const outputEl      = document.getElementById('modal-output');
+  if (task.output) {
+    outputSection.style.display = 'block';
+    outputEl.textContent = task.output;
+  } else if (task.status === 'running') {
+    outputSection.style.display = 'block';
+    outputEl.textContent = '(task is still running…)';
+  } else {
+    outputSection.style.display = 'none';
+    outputEl.textContent = '';
+  }
+
+  // Error
   const errSection = document.getElementById('modal-error-section');
   if (task.error) {
     errSection.style.display = 'block';
@@ -182,6 +452,7 @@ async function viewTask(id) {
   } else {
     errSection.style.display = 'none';
   }
+
   document.getElementById('modal').classList.add('show');
 }
 
@@ -189,30 +460,32 @@ function closeModal() {
   document.getElementById('modal').classList.remove('show');
 }
 
-// SSE for real-time updates
-function connectSSE() {
-  const es = new EventSource('/api/events');
-  es.onmessage = (e) => {
-    if (e.data) refresh();
-  };
-  es.onerror = () => {
-    es.close();
-    setTimeout(connectSSE, 3000);
-  };
+// ── Auto-expanding textarea ────────────────────────────────────────────────
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 280) + 'px';
 }
 
-// Keyboard shortcut: Ctrl+Enter to submit
-document.getElementById('prompt').addEventListener('keydown', (e) => {
+document.getElementById('prompt').addEventListener('input', e => autoResize(e.target));
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+document.getElementById('prompt').addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     submitTask();
   }
 });
 
-// Escape to close modal
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();
 });
+
+// ── SSE for real-time updates ──────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.onmessage = e => { if (e.data) refresh(); };
+  es.onerror   = () => { es.close(); setTimeout(connectSSE, 3000); };
+}
 
 connectSSE();
 setInterval(refresh, 3000);
