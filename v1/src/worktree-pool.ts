@@ -198,6 +198,13 @@ export class WorktreePool {
   }
 
   /**
+   * Look up a worker by its name. Returns undefined if not found.
+   */
+  getWorker(name: string): WorkerInfo | undefined {
+    return this.workers.get(name);
+  }
+
+  /**
    * Find the worker currently running the given task ID.
    * Returns undefined if no worker is handling that task.
    */

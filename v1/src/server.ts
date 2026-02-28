@@ -233,12 +233,17 @@ export class WebServer {
     app.get("/api/tasks/:id/diff", (c) => {
       const task = this._scheduler.getTask(c.req.param("id"));
       if (!task) return c.json({ error: "not found" }, 404);
-      if (!task.worktree) return c.json({ error: "no worktree assigned to this task" }, 404);
+      if (!task.worktree) return c.json({ diff: null, message: "worktree not available" });
+
+      const worker = this.pool.getWorker(task.worktree);
+      if (!worker) return c.json({ diff: null, message: "worktree not available" });
+
+      const worktreePath = worker.path;
 
       let commit: string;
       let diff: string;
       try {
-        commit = execSync("git log --oneline -1", { cwd: task.worktree }).toString().trim();
+        commit = execSync("git log --oneline -1", { cwd: worktreePath }).toString().trim();
       } catch {
         return c.json({ error: "no commits in worktree" }, 404);
       }
@@ -248,7 +253,7 @@ export class WebServer {
       }
 
       try {
-        diff = execSync("git diff HEAD~1..HEAD", { cwd: task.worktree }).toString();
+        diff = execSync("git diff HEAD~1..HEAD", { cwd: worktreePath }).toString();
       } catch {
         return c.json({ error: "no commits in worktree" }, 404);
       }
