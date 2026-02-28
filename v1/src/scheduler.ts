@@ -138,6 +138,30 @@ export class Scheduler {
     return total / completed.length;
   }
 
+  getHistoricalInsights(): { avgDuration: number; successRate: number; avgCost: number; timeoutRate: number } {
+    const stats = this.store.stats();
+    const successCount = stats.byStatus["success"] ?? 0;
+    const failedCount = stats.byStatus["failed"] ?? 0;
+    const timeoutCount = stats.byStatus["timeout"] ?? 0;
+    const cancelledCount = stats.byStatus["cancelled"] ?? 0;
+    const totalCompleted = successCount + failedCount + timeoutCount + cancelledCount;
+
+    const successRate = totalCompleted > 0 ? successCount / totalCompleted : 0;
+    const timeoutRate = totalCompleted > 0 ? timeoutCount / totalCompleted : 0;
+
+    const successTasks = this.store.getByStatus("success");
+    const avgDuration =
+      successTasks.length > 0
+        ? successTasks.reduce((sum, t) => sum + t.durationMs, 0) / successTasks.length
+        : 0;
+    const avgCost =
+      successTasks.length > 0
+        ? successTasks.reduce((sum, t) => sum + t.costUsd, 0) / successTasks.length
+        : 0;
+
+    return { avgDuration, successRate, avgCost, timeoutRate };
+  }
+
   getStats() {
     const dbStats = this.store.stats();
     const avgDurationMs = this.getAverageDuration();
