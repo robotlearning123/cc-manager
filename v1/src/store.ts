@@ -358,6 +358,18 @@ export class Store {
     return rows.map((r) => this.rowToTask(r));
   }
 
+  /** Returns the {@link limit} most recent failed/timeout tasks as lightweight
+   *  failure pattern records — prompt snippet (first 200 chars), error message,
+   *  and status — so callers can learn from past failures without loading full Tasks. */
+  getFailurePatterns(limit = 10): { prompt: string; error: string; status: string }[] {
+    const rows = this.db
+      .prepare(
+        "SELECT substr(prompt, 1, 200) AS prompt, error, status FROM tasks WHERE status IN ('failed', 'timeout') ORDER BY created_at DESC LIMIT ?"
+      )
+      .all(limit) as { prompt: string; error: string; status: string }[];
+    return rows;
+  }
+
   /** Returns one entry per calendar day for the last 7 days (newest first).
    *  Days with no tasks are omitted.  `successRate` is in [0, 1]. */
   getDailyStats(): Array<{ date: string; count: number; cost: number; successRate: number }> {
