@@ -17,6 +17,12 @@ export interface RunningTaskInfo {
   costUsd: number;
 }
 
+export interface ReviewResult {
+  score: number;
+  issues: string[];
+  suggestions: string[];
+}
+
 export class AgentRunner {
   private readonly _runningTasks = new Map<string, RunningTaskEntry>();
 
@@ -33,6 +39,25 @@ export class AgentRunner {
     };
     const r = rates[model] ?? rates["claude-sonnet-4-6"];
     return tokenInput * r.input + tokenOutput * r.output;
+  }
+
+  /** Reviews a git diff and returns a score with issues and suggestions. */
+  reviewDiff(diff: string): ReviewResult {
+    const issues: string[] = [];
+    const suggestions: string[] = [];
+    let score = 50;
+
+    if (/\.(test|spec)\.(ts|js|tsx|jsx)/.test(diff)) {
+      score += 20;
+      suggestions.push("Good: changes include test files.");
+    }
+
+    if (/console\.log/.test(diff)) {
+      issues.push("Avoid leaving console.log statements in production code.");
+      score -= 10;
+    }
+
+    return { score, issues, suggestions };
   }
 
   /** Returns info about all tasks currently being executed by this runner. */
