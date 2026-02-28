@@ -126,6 +126,35 @@ export interface RoundSummary {
   patternsDetected: string[];
 }
 
+export interface AutoFlywheelConfig {
+  enabled: boolean;
+  maxTasksPerRound: number;
+  minSuccessRate: number;
+  cooldownMinutes: number;
+  targetFiles: string[];
+}
+
+export const defaultAutoFlywheelConfig: AutoFlywheelConfig = {
+  enabled: false,
+  maxTasksPerRound: 5,
+  minSuccessRate: 0.8,
+  cooldownMinutes: 30,
+  targetFiles: [
+    "v1/src/types.ts",
+    "v1/src/queue.ts",
+    "v1/src/server.ts",
+    "v1/src/worker.ts",
+    "v1/src/routes.ts",
+  ],
+};
+
+export interface FlywheelState {
+  lastRunAt: string | undefined;
+  roundsCompleted: number;
+  totalTasksGenerated: number;
+  lastAnalysis: EvolutionEntry | undefined;
+}
+
 export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "timeout" | "maxBudget" | "maxRetries" | "priority" | "dependsOn" | "tags" | "webhookUrl">>): Task {
   return {
     id: opts?.id ?? crypto.randomUUID().slice(0, 8),
