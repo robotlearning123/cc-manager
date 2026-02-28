@@ -14,6 +14,7 @@ export class Scheduler {
   private tasks = new Map<string, Task>();
   private totalBudgetLimit = 0;
   private metricsInterval?: ReturnType<typeof setInterval>;
+  private progressIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private dispatchResolve?: () => void;
 
   setTotalBudgetLimit(usd: number): void {
@@ -136,6 +137,23 @@ export class Scheduler {
   }
 
   /**
+   * Emit a task_progress event for the given running task with elapsed time,
+   * current cost, and token counts.
+   */
+  private emitProgress(task: Task): void {
+    const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Date.now();
+    const elapsedMs = Date.now() - startedAt;
+    this.onEvent?.({
+      type: "task_progress",
+      taskId: task.id,
+      elapsedMs,
+      costUsd: task.costUsd,
+      tokenInput: task.tokenInput,
+      tokenOutput: task.tokenOutput,
+    });
+  }
+
+  /**
    * Wake the dispatch loop early, cancelling any pending wait.
    * Called when a new task is submitted or a worker is released.
    */
@@ -225,6 +243,8 @@ export class Scheduler {
 
   private async executeAndRelease(task: Task, workerName: string, workerPath: string): Promise<void> {
     let shouldRetry = false;
+    const progressInterval = setInterval(() => this.emitProgress(task), 10_000);
+    this.progressIntervals.set(task.id, progressInterval);
     try {
       log("info", "task started", { taskId: task.id, worker: workerName });
       await this.runner.run(task, workerPath, this.onEvent);
@@ -246,6 +266,12 @@ export class Scheduler {
       task.completedAt = new Date().toISOString();
       await this.pool.release(workerName, false);
     } finally {
+      // Clear the progress reporting interval now that the task is done
+      const interval = this.progressIntervals.get(task.id);
+      if (interval !== undefined) {
+        clearInterval(interval);
+        this.progressIntervals.delete(task.id);
+      }
       // Retry logic: re-queue failed tasks (not timeout/cancelled) up to maxRetries times
       if (task.status === "failed" && task.retryCount < task.maxRetries) {
         shouldRetry = true;
