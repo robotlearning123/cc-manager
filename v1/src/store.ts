@@ -164,6 +164,63 @@ export class Store {
     };
   }
 
+  /** Deletes tasks whose created_at is older than {@link days} days ago.
+   *  Returns the number of rows deleted. */
+  deleteOlderThan(days: number): number {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const result = this.db
+      .prepare("DELETE FROM tasks WHERE created_at < ?")
+      .run(cutoff.toISOString());
+    return result.changes;
+  }
+
+  /** Returns all tasks whose status matches {@link status}, newest first. */
+  getByStatus(status: string): Task[] {
+    const rows = this.db
+      .prepare("SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC")
+      .all(status) as any[];
+    return rows.map((r) => this.rowToTask(r));
+  }
+
+  /** Returns the {@link limit} most recent tasks that failed or timed out,
+   *  newest first.  Each Task includes the full `error` field. */
+  getRecentErrors(limit: number): Task[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM tasks WHERE status IN ('failed', 'timeout') ORDER BY created_at DESC LIMIT ?"
+      )
+      .all(limit) as any[];
+    return rows.map((r) => this.rowToTask(r));
+  }
+
+  /** Returns one entry per calendar day for the last 7 days (newest first).
+   *  Days with no tasks are omitted.  `successRate` is in [0, 1]. */
+  getDailyStats(): Array<{ date: string; count: number; cost: number; successRate: number }> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 7);
+    const rows = this.db
+      .prepare(
+        `SELECT
+          substr(created_at, 1, 10)                          AS date,
+          COUNT(*)                                           AS count,
+          COALESCE(SUM(cost_usd), 0)                         AS cost,
+          SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count
+        FROM tasks
+        WHERE created_at >= ?
+        GROUP BY date
+        ORDER BY date DESC`
+      )
+      .all(cutoff.toISOString()) as any[];
+
+    return rows.map((r) => ({
+      date: r.date as string,
+      count: r.count as number,
+      cost: r.cost as number,
+      successRate: r.count > 0 ? (r.success_count as number) / (r.count as number) : 0,
+    }));
+  }
+
   close(): void {
     this.db.close();
   }
