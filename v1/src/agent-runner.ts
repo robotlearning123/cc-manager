@@ -216,6 +216,13 @@ export class AgentRunner {
       // No commits made, insufficient history, or git unavailable – skip silently
     }
 
+    // Post-execution build verification
+    const buildResult = this.verifyBuild(cwd);
+    if (!buildResult.ok) {
+      task.output = "[TSC_FAILED] " + (task.output ?? "");
+      task.error = buildResult.errors;
+    }
+
     task.completedAt = new Date().toISOString();
     log("info", "task complete", {
       taskId: task.id,
@@ -225,5 +232,16 @@ export class AgentRunner {
     });
     onEvent?.({ type: "task_completed", taskId: task.id, status: task.status });
     return task;
+  }
+
+  private verifyBuild(cwd: string): { ok: boolean; errors: string } {
+    try {
+      execSync("npx tsc --noEmit", { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      return { ok: true, errors: "" };
+    } catch (err: unknown) {
+      const e = err as { stdout?: string; stderr?: string; message?: string };
+      const errors = ((e.stdout ?? "") + (e.stderr ?? "")).trim() || (e.message ?? "unknown tsc error");
+      return { ok: false, errors };
+    }
   }
 }
