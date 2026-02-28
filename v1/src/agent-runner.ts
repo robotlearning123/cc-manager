@@ -24,6 +24,16 @@ export class AgentRunner {
     private systemPrompt: string = "",
   ) {}
 
+  /** Estimates USD cost for a given token usage and model. */
+  static estimateCost(tokenInput: number, tokenOutput: number, model: string): number {
+    const rates: Record<string, { input: number; output: number }> = {
+      "claude-sonnet-4-6": { input: 3 / 1_000_000, output: 15 / 1_000_000 },
+      "claude-opus-4-5": { input: 15 / 1_000_000, output: 75 / 1_000_000 },
+    };
+    const r = rates[model] ?? rates["claude-sonnet-4-6"];
+    return tokenInput * r.input + tokenOutput * r.output;
+  }
+
   /** Returns info about all tasks currently being executed by this runner. */
   getRunningTasks(): RunningTaskInfo[] {
     const now = Date.now();
