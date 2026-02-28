@@ -61,11 +61,24 @@ export class WebServer {
 
     // API: submit task
     app.post("/api/tasks", async (c) => {
-      const body = await c.req.json<{ prompt: string; timeout?: number; maxBudget?: number }>();
-      if (!body.prompt) return c.json({ error: "prompt required" }, 400);
+      let body: { prompt?: unknown; timeout?: unknown; maxBudget?: unknown };
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: "bad json" }, 400);
+      }
+      if (typeof body.prompt !== "string" || body.prompt.trim() === "") {
+        return c.json({ error: "prompt must be a non-empty string" }, 400);
+      }
+      if (body.timeout !== undefined && (typeof body.timeout !== "number" || body.timeout <= 0)) {
+        return c.json({ error: "timeout must be a positive number" }, 400);
+      }
+      if (body.maxBudget !== undefined && (typeof body.maxBudget !== "number" || body.maxBudget <= 0)) {
+        return c.json({ error: "maxBudget must be a positive number" }, 400);
+      }
       const task = this._scheduler.submit(body.prompt, {
-        timeout: body.timeout,
-        maxBudget: body.maxBudget,
+        timeout: body.timeout as number | undefined,
+        maxBudget: body.maxBudget as number | undefined,
       });
       return c.json({ id: task.id, status: task.status }, 201);
     });
