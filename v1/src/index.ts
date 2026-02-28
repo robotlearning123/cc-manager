@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Command } from "commander";
 import { existsSync, readFileSync } from "fs";
 import { WorktreePool } from "./worktree-pool.js";
