@@ -41,6 +41,22 @@ export interface WorkerInfo {
   currentTask?: string;
 }
 
+export interface WorkerStatus {
+  name: string;
+  path: string;
+  branch: string;
+  busy: boolean;
+  currentTask: string | null;
+  uptime?: number;
+  taskCount?: number;
+}
+
+export interface Stats {
+  total: number;
+  byStatus: Record<string, number>;
+  totalCost: number;
+}
+
 export interface Config {
   repo: string;
   workers: number;
