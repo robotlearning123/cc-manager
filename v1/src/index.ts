@@ -87,20 +87,14 @@ async function main() {
 
   // Print formatted startup banner
   const col = 16;
-  const url = `http://localhost:${opts.port}`;
+  const dashboardUrl = `http://localhost:${port}`;
   console.log("");
-  console.log("  CC-Manager V1  •  Ready");
-  console.log("  " + "─".repeat(44));
-  console.log(`  ${"Server URL".padEnd(col)}${url}`);
+  console.log(`  ${"Version".padEnd(col)}${version}`);
   console.log(`  ${"Repo".padEnd(col)}${opts.repo}`);
-  console.log(`  ${"Workers".padEnd(col)}${opts.workers}`);
+  console.log(`  ${"Workers".padEnd(col)}${workers}`);
+  console.log(`  ${"Port".padEnd(col)}${port}`);
   console.log(`  ${"Model".padEnd(col)}${opts.model}`);
-  console.log(`  ${"Timeout".padEnd(col)}${opts.timeout}s`);
-  console.log(`  ${"Budget".padEnd(col)}$${opts.budget} per task`);
-  if (totalBudget > 0) {
-    console.log(`  ${"Total Budget".padEnd(col)}$${totalBudget}`);
-  }
-  console.log("  " + "─".repeat(44));
+  console.log(`  ${"Dashboard URL".padEnd(col)}${dashboardUrl}`);
   console.log("");
 
   const shutdown = async () => {
