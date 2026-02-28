@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { streamSSE } from "hono/streaming";
+import { cors } from "hono/cors";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +60,9 @@ export class WebServer {
 
   private setupRoutes(): void {
     const app = this.app;
+
+    // Enable CORS for all routes (allows external frontends and tools to access the API)
+    app.use(cors());
 
     // Dashboard
     app.get("/", (c) => {
