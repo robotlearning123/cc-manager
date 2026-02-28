@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { readFileSync } from "fs";
 import { WorktreePool } from "./worktree-pool.js";
 import { AgentRunner } from "./agent-runner.js";
 import { Store } from "./store.js";
@@ -15,9 +16,16 @@ const program = new Command()
   .option("--budget <usd>", "Max budget per task in USD", "5")
   .option("--model <id>", "Claude model ID", "claude-sonnet-4-6")
   .option("--system-prompt <text>", "System prompt for all agents", "")
+  .option("--system-prompt-file <path>", "Path to a file containing the system prompt (takes precedence over --system-prompt)")
   .parse();
 
 const opts = program.opts();
+
+// Resolve system prompt: file takes precedence over inline text
+let systemPrompt: string = opts.systemPrompt ?? "";
+if (opts.systemPromptFile) {
+  systemPrompt = readFileSync(opts.systemPromptFile, "utf8");
+}
 
 async function main() {
   console.log("CC-Manager V1 starting...");
@@ -29,7 +37,7 @@ async function main() {
   const pool = new WorktreePool(opts.repo, parseInt(opts.workers));
   await pool.init();
 
-  const runner = new AgentRunner(opts.model, opts.systemPrompt);
+  const runner = new AgentRunner(opts.model, systemPrompt);
   const store = new Store(opts.repo);
 
   const server = new WebServer(pool, parseInt(opts.port));
