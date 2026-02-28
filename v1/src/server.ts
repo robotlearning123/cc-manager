@@ -97,6 +97,15 @@ export class WebServer {
     // API: stats
     app.get("/api/stats", (c) => c.json(this._scheduler.getStats()));
 
+    // API: budget summary
+    app.get("/api/budget", (c) => {
+      const stats = this._scheduler.getStats();
+      const spent = stats.totalCost;
+      const limit = stats.totalBudgetLimit;
+      const remaining = limit === 0 ? null : Math.max(0, limit - spent);
+      return c.json({ spent, limit, remaining });
+    });
+
     // API: list tasks
     // Query params: ?status=running, ?q=keyword, ?limit=10, ?tag=name
     app.get("/api/tasks", (c) => {

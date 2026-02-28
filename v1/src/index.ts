@@ -17,6 +17,7 @@ const program = new Command()
   .option("--model <id>", "Claude model ID", "claude-sonnet-4-6")
   .option("--system-prompt <text>", "System prompt for all agents", "")
   .option("--system-prompt-file <path>", "Path to a file containing the system prompt (takes precedence over --system-prompt)")
+  .option("--total-budget <usd>", "Total spend limit in USD across all tasks (0 = unlimited)", "0")
   .parse();
 
 const opts = program.opts();
@@ -47,6 +48,12 @@ async function main() {
   });
 
   server.setScheduler(scheduler);
+
+  const totalBudget = parseFloat(opts.totalBudget);
+  if (totalBudget > 0) {
+    console.log(`  total-budget: $${totalBudget}`);
+    scheduler.setTotalBudgetLimit(totalBudget);
+  }
 
   scheduler.start();
   server.start();

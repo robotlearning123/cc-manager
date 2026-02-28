@@ -12,6 +12,12 @@ export class Scheduler {
   private activeWorkers = new Set<string>();
   private running = false;
   private tasks = new Map<string, Task>();
+  private totalBudgetLimit = 0;
+
+  setTotalBudgetLimit(usd: number): void {
+    this.totalBudgetLimit = usd;
+    log("info", "total budget limit set", { totalBudgetLimit: usd });
+  }
 
   constructor(
     private pool: WorktreePool,
@@ -84,6 +90,7 @@ export class Scheduler {
       availableWorkers: this.pool.available,
       avgDurationMs,
       estimatedWaitMs: (avgDurationMs * queueSize) / Math.max(activeWorkers, 1),
+      totalBudgetLimit: this.totalBudgetLimit,
     };
   }
 
@@ -92,6 +99,19 @@ export class Scheduler {
       if (this.queue.length === 0 || this.pool.available === 0) {
         await new Promise((r) => setTimeout(r, 500));
         continue;
+      }
+
+      // Budget guard: halt dispatch if total spend has reached the limit
+      if (this.totalBudgetLimit > 0) {
+        const { totalCost } = this.getStats();
+        if (totalCost >= this.totalBudgetLimit) {
+          log("warn", "total budget limit reached, not dispatching", {
+            totalCost,
+            totalBudgetLimit: this.totalBudgetLimit,
+          });
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
       }
 
       // Sort queue: high → normal → low before picking the next task
