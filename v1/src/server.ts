@@ -137,6 +137,11 @@ export class WebServer {
       return c.json(daily);
     });
 
+    // API: summary stats (today + all-time)
+    app.get("/api/stats/summary", (c) => {
+      return c.json(this.store.getSummaryStats());
+    });
+
     // API: historical insights
     app.get("/api/insights", (c) => {
       return c.json(this._scheduler.getHistoricalInsights());

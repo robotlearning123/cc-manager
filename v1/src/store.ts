@@ -347,20 +347,6 @@ export class Store {
     return rows.map((r) => this.rowToTask(r));
   }
 
-  /** Returns the {@link limit} most recent failure patterns (error + prompt snippet)
-   *  for context injection into future agent prompts. */
-  getFailurePatterns(limit: number): Array<{ error: string; promptSnippet: string }> {
-    const rows = this.db
-      .prepare(
-        "SELECT error, prompt FROM tasks WHERE status IN ('failed', 'timeout') ORDER BY created_at DESC LIMIT ?"
-      )
-      .all(limit) as any[];
-    return rows.map((r) => ({
-      error: r.error as string,
-      promptSnippet: (r.prompt as string).slice(0, 100),
-    }));
-  }
-
   /** Returns the {@link limit} most recent tasks that failed or timed out,
    *  newest first.  Each Task includes the full `error` field. */
   getRecentErrors(limit: number): Task[] {
@@ -409,6 +395,48 @@ export class Store {
       cost: r.cost as number,
       successRate: r.count > 0 ? (r.success_count as number) / (r.count as number) : 0,
     }));
+  }
+
+  getSummaryStats(): {
+    tasksToday: number;
+    successRateToday: number;
+    totalCostToday: number;
+    avgDurationToday: number;
+    totalTasksAllTime: number;
+    overallSuccessRate: number;
+  } {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+    const todayRow = this.db.prepare(`
+      SELECT
+        COUNT(*) AS tasks_today,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_today,
+        COALESCE(SUM(cost_usd), 0) AS total_cost_today,
+        COALESCE(AVG(duration_ms), 0) AS avg_duration_today
+      FROM tasks
+      WHERE substr(created_at, 1, 10) = ?
+    `).get(today) as any;
+
+    const allTimeRow = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total_tasks,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_all
+      FROM tasks
+    `).get() as any;
+
+    const tasksToday: number = todayRow.tasks_today ?? 0;
+    const successToday: number = todayRow.success_today ?? 0;
+    const totalTasksAllTime: number = allTimeRow.total_tasks ?? 0;
+    const successAll: number = allTimeRow.success_all ?? 0;
+
+    return {
+      tasksToday,
+      successRateToday: tasksToday > 0 ? (successToday / tasksToday) * 100 : 0,
+      totalCostToday: todayRow.total_cost_today ?? 0,
+      avgDurationToday: todayRow.avg_duration_today ?? 0,
+      totalTasksAllTime,
+      overallSuccessRate: totalTasksAllTime > 0 ? (successAll / totalTasksAllTime) * 100 : 0,
+    };
   }
 
   saveEvolution(entry: EvolutionEntry): void {
