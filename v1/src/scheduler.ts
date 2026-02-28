@@ -169,7 +169,7 @@ export class Scheduler {
   getFailureContext(): string {
     const patterns = this.store.getFailurePatterns(5);
     if (patterns.length === 0) return "Recent failures: none";
-    const lines = patterns.map((p) => `- Error: ${p.error} | Prompt: ${p.promptSnippet}`);
+    const lines = patterns.map((p) => `- Error: ${p.error} | Prompt: ${p.prompt}`);
     return `Recent failures:\n${lines.join("\n")}`;
   }
 
@@ -212,6 +212,53 @@ export class Scheduler {
         peakDay: daily.length > 0 ? daily.reduce((a, b) => (a.count >= b.count ? a : b)).date : null,
       },
     };
+  }
+
+  generateImprovementTasks(): string[] {
+    const prompts: string[] = [];
+    const insights = this.getHistoricalInsights();
+    const failures = this.store.getFailurePatterns(5);
+
+    // Suggest fixes for recurring failures
+    for (const f of failures) {
+      prompts.push(
+        `Investigate and fix the recurring error seen in recent tasks: "${f.error}". ` +
+          `The failing task prompt was: "${f.prompt.slice(0, 120)}"`,
+      );
+    }
+
+    // Suggest timeout reduction if timeout rate is high
+    if (insights.timeoutRate > 0.1) {
+      prompts.push(
+        `Timeout rate is ${Math.round(insights.timeoutRate * 100)}%. ` +
+          `Identify tasks that are timing out and optimize them to complete faster.`,
+      );
+    }
+
+    // Suggest reliability improvements if success rate is low
+    if (insights.successRate < 0.8 && insights.successRate > 0) {
+      prompts.push(
+        `Task success rate is ${Math.round(insights.successRate * 100)}%. ` +
+          `Analyze failure patterns and improve task prompts or code to increase reliability.`,
+      );
+    }
+
+    // Suggest cost optimization if average cost is high
+    if (insights.avgCost > 0.1) {
+      prompts.push(
+        `Average task cost is $${insights.avgCost.toFixed(3)}. ` +
+          `Review long-running tasks and optimize prompts to reduce token usage.`,
+      );
+    }
+
+    // Fallback: always return at least one prompt
+    if (prompts.length === 0) {
+      prompts.push(
+        "Review recent successful task outputs for code quality improvements and refactoring opportunities.",
+      );
+    }
+
+    return prompts;
   }
 
   analyzeRound(taskIds: string[]): Record<string, unknown> {

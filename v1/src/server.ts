@@ -429,6 +429,21 @@ export class WebServer {
       return c.json(entry);
     });
 
+    // API: flywheel – suggest improvement task prompts without executing them
+    app.post("/api/flywheel/suggest", (c) => {
+      const prompts = this._scheduler.generateImprovementTasks();
+      return c.json({ prompts });
+    });
+
+    // API: flywheel – generate improvement tasks and submit each as a real task
+    app.post("/api/flywheel/run", (c) => {
+      const prompts = this._scheduler.generateImprovementTasks();
+      const tasks = prompts.map((prompt) =>
+        this._scheduler.submit(prompt, { tags: ["flywheel"] }),
+      );
+      return c.json({ taskIds: tasks.map((t) => t.id) }, 201);
+    });
+
     // API: self-documenting endpoint listing
     app.get("/api/docs", (c) => {
       const docs = {
