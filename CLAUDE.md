@@ -30,7 +30,7 @@ node dist/index.js --repo /path/to/repo --workers 5 --port 8080
 ```
 
 ```bash
-# Run tests (255 tests across 6 suites)
+# Run tests (273 tests across 7 suites)
 node --import tsx --test src/__tests__/*.test.ts
 ```
 
@@ -140,7 +140,8 @@ pending → running → success (branch merged to main)
 - `src/__tests__/scheduler.test.ts` — Submit, cancel, stats, queue position
 - `src/__tests__/agent-runner.test.ts` — Cost estimation, code review, system prompt, CLI dispatch
 - `src/__tests__/server.test.ts` — API input validation (prompt, timeout, priority, tags, webhookUrl)
-- `src/__tests__/cli.test.ts` — CLI commands, fetch mocking, output formatting, error handling
+- `src/__tests__/cli.test.ts` — CLI commands (all 12), fetch mocking, output formatting, error handling
+- `src/__tests__/logger.test.ts` — Structured logger: JSON format, level filtering, stream routing
 
 ## Repository
 - **GitHub**: `agent-next/cc-manager` (private)
