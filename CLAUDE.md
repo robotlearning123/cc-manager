@@ -4,7 +4,8 @@
 Multi-agent orchestrator that runs parallel Claude Code agents in git worktrees. Tasks submitted via REST API, monitored via SSE, agents auto-commit and merge to main.
 
 ## Architecture
-- **src/index.ts** — CLI entry point (Commander.js)
+- **src/index.ts** — Server entry point (Commander.js)
+- **src/cli.ts** — CLI client commands (submit, list, status, diff, logs, stats, workers, search, cancel, retry, watch)
 - **src/server.ts** — Hono REST API + SSE
 - **src/scheduler.ts** — Task queue, priority dispatch, retry logic, stale worker recovery
 - **src/agent-runner.ts** — Multi-agent CLI spawning (Claude, Codex, generic), cost tracking, code review
@@ -37,7 +38,7 @@ node --import tsx --test src/__tests__/*.test.ts
 - Always use `.js` extensions in TypeScript imports (ESM)
 - Run `npx tsc` after changes to verify compilation
 - Only modify core files — do NOT create standalone utility modules
-- Core files: server.ts, scheduler.ts, store.ts, agent-runner.ts, worktree-pool.ts, index.ts, types.ts, logger.ts
+- Core files: server.ts, scheduler.ts, store.ts, agent-runner.ts, worktree-pool.ts, index.ts, cli.ts, types.ts, logger.ts
 - Keep changes minimal and focused — one concern per change
 - Always `git add -A && git commit` after successful changes
 
