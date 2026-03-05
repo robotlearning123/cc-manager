@@ -51,6 +51,7 @@ function makeScheduler(opts?: {
   submitHandler?: (prompt: string) => Task;
   getTaskHandler?: (id: string) => Task | undefined;
   cancelHandler?: (id: string) => boolean;
+  abortHandler?: (id: string) => boolean;
 }): Scheduler {
   const tasks = new Map<string, Task>();
   return {
@@ -68,6 +69,10 @@ function makeScheduler(opts?: {
     cancel: (id: string) => {
       if (opts?.cancelHandler) return opts.cancelHandler(id);
       return true;
+    },
+    abort: (id: string) => {
+      if (opts?.abortHandler) return opts.abortHandler(id);
+      return false;
     },
   } as unknown as Scheduler;
 }
@@ -294,6 +299,87 @@ describe("Pipeline", () => {
     }
   });
 
+  it("fails the pipeline immediately when research_plan meta-task fails", async () => {
+    const { db, cleanup } = makeTempDb();
+    try {
+      const store = new PipelineStore(db);
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-research-fail-"));
+      const events: Record<string, unknown>[] = [];
+
+      const runner = makeRunner((task) => {
+        task.status = "failed";
+        task.error = "planner crashed";
+        return task;
+      });
+
+      const pipeline = new Pipeline(
+        runner,
+        makeScheduler(),
+        store,
+        repoDir,
+        (ev) => events.push(ev),
+        makeConfig(),
+      );
+
+      const run = pipeline.start("break at planning");
+      await new Promise((r) => setTimeout(r, 200));
+
+      const saved = store.get(run.id);
+      assert.ok(saved !== null);
+      assert.strictEqual(saved.stage, "failed");
+      assert.ok(saved.error?.includes("research_plan task failed"));
+      assert.ok(saved.error?.includes("planner crashed"));
+      assert.ok(events.some((e) => e.type === "pipeline:failed"));
+
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("fails the pipeline immediately when decompose meta-task fails", async () => {
+    const { db, cleanup } = makeTempDb();
+    try {
+      const store = new PipelineStore(db);
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-decompose-fail-"));
+
+      let callCount = 0;
+      const runner = makeRunner((task) => {
+        callCount++;
+        if (callCount === 1) {
+          task.status = "success";
+          task.output = "plan created";
+        } else {
+          task.status = "failed";
+          task.error = "decompose agent timed out";
+        }
+        return task;
+      });
+
+      const pipeline = new Pipeline(
+        runner,
+        makeScheduler(),
+        store,
+        repoDir,
+        () => {},
+        makeConfig(),
+      );
+
+      const run = pipeline.start("break at decompose");
+      await new Promise((r) => setTimeout(r, 300));
+
+      const saved = store.get(run.id);
+      assert.ok(saved !== null);
+      assert.strictEqual(saved.stage, "failed");
+      assert.ok(saved.error?.includes("decompose task failed"));
+      assert.ok(saved.error?.includes("decompose agent timed out"));
+
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("human checkpoint: pauses at waiting_approval, approve() resumes", async () => {
     const { db, cleanup } = makeTempDb();
     try {
@@ -366,9 +452,11 @@ describe("Pipeline", () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-cancel-"));
       const events: Record<string, unknown>[] = [];
       const cancelledIds: string[] = [];
+      const abortedIds: string[] = [];
 
       const scheduler = makeScheduler({
         cancelHandler: (id) => { cancelledIds.push(id); return true; },
+        abortHandler: (id) => { abortedIds.push(id); return true; },
       });
 
       const pipeline = new Pipeline(
@@ -396,6 +484,7 @@ describe("Pipeline", () => {
       assert.strictEqual(saved.stage, "failed");
       assert.strictEqual(saved.error, "Cancelled by user");
       assert.deepStrictEqual(cancelledIds, ["t1", "t2"]);
+      assert.deepStrictEqual(abortedIds, ["t1", "t2"]);
       assert.ok(events.some((e) => e.type === "pipeline:cancelled"));
 
       fs.rmSync(repoDir, { recursive: true, force: true });
@@ -473,6 +562,79 @@ describe("Pipeline", () => {
     }
   });
 
+  it("persists taskIds before a wave completes so cancel can see in-flight tasks", async () => {
+    const { db, cleanup } = makeTempDb();
+    try {
+      const store = new PipelineStore(db);
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-persist-taskids-"));
+      const taskMap = new Map<string, Task>();
+
+      let callCount = 0;
+      const runner = makeRunner((task) => {
+        callCount++;
+        task.status = "success";
+        if (callCount === 1) {
+          task.output = "plan created";
+        } else if (callCount === 2) {
+          task.output = JSON.stringify({
+            waves: [{ waveIndex: 0, tasks: ["long running task"] }],
+            totalTasks: 1,
+          });
+        } else {
+          task.output = JSON.stringify({ tscClean: true, testsPass: true, errors: [], verdict: "pass" });
+        }
+        return task;
+      });
+
+      const scheduler = makeScheduler({
+        submitHandler: (prompt: string) => {
+          const task = createTask(prompt);
+          task.status = "running";
+          taskMap.set(task.id, task);
+          return task;
+        },
+        getTaskHandler: (id: string) => taskMap.get(id),
+        cancelHandler: (id: string) => {
+          const task = taskMap.get(id);
+          if (task) task.status = "cancelled";
+          return true;
+        },
+        abortHandler: (id: string) => {
+          const task = taskMap.get(id);
+          if (task) task.status = "cancelled";
+          return true;
+        },
+      });
+
+      const pipeline = new Pipeline(
+        runner,
+        scheduler,
+        store,
+        repoDir,
+        () => {},
+        makeConfig(),
+      );
+
+      const run = pipeline.start("persist task ids early");
+      await new Promise((r) => setTimeout(r, 300));
+
+      const midRun = store.get(run.id);
+      assert.ok(midRun !== null);
+      assert.strictEqual(midRun.taskIds.length, 1, "taskIds should be saved before the wave finishes");
+
+      pipeline.cancel(run.id);
+      await new Promise((r) => setTimeout(r, 200));
+
+      const saved = store.get(run.id);
+      assert.ok(saved !== null);
+      assert.strictEqual(saved.stage, "failed");
+
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("wave execution: wave 0 completes before wave 1 starts", async () => {
     const { db, cleanup } = makeTempDb();
     try {
@@ -522,6 +684,49 @@ describe("Pipeline", () => {
       assert.strictEqual(waveDoneEvents.length, 2);
       assert.strictEqual(waveStartEvents[0].waveIndex, 0);
       assert.strictEqual(waveStartEvents[1].waveIndex, 1);
+
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("writes decomposed task artifacts under run-scoped directories", async () => {
+    const { db, cleanup } = makeTempDb();
+    try {
+      const store = new PipelineStore(db);
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-run-scope-"));
+
+      const runner = makeRunner((task) => {
+        task.status = "success";
+        if (task.prompt.includes("Convert the plan")) {
+          task.output = JSON.stringify({
+            waves: [{ waveIndex: 0, tasks: ["task A"] }],
+            totalTasks: 1,
+          });
+        } else if (task.prompt.includes("verification")) {
+          task.output = JSON.stringify({ tscClean: true, testsPass: true, errors: [], verdict: "pass" });
+        } else {
+          task.output = "plan";
+        }
+        return task;
+      });
+
+      const pipeline = new Pipeline(
+        runner,
+        makeScheduler(),
+        store,
+        repoDir,
+        () => {},
+        makeConfig(),
+      );
+
+      const runA = pipeline.start("goal A");
+      const runB = pipeline.start("goal B");
+      await new Promise((r) => setTimeout(r, 500));
+
+      assert.ok(fs.existsSync(path.join(repoDir, ".cc-pipeline", runA.id, "tasks.json")));
+      assert.ok(fs.existsSync(path.join(repoDir, ".cc-pipeline", runB.id, "tasks.json")));
 
       fs.rmSync(repoDir, { recursive: true, force: true });
     } finally {
@@ -900,8 +1105,6 @@ describe("Pipeline", () => {
       const store = new PipelineStore(db);
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-context-"));
       fs.mkdirSync(path.join(repoDir, ".git"));
-      fs.mkdirSync(path.join(repoDir, ".cc-pipeline"), { recursive: true });
-      fs.writeFileSync(path.join(repoDir, ".cc-pipeline", "plan.md"), "# My Plan\nDetails here");
 
       const submittedPrompts: string[] = [];
       let callNum = 0;
@@ -932,14 +1135,16 @@ describe("Pipeline", () => {
       });
 
       const pipeline = new Pipeline(runner, scheduler, store, repoDir, () => {}, makeConfig());
-      pipeline.start("context test");
+      const run = pipeline.start("context test");
+      fs.mkdirSync(path.join(repoDir, ".cc-pipeline", run.id), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, ".cc-pipeline", run.id, "plan.md"), "# My Plan\nDetails here");
 
       await new Promise((r) => setTimeout(r, 1500));
 
       assert.ok(submittedPrompts.length > 0, "should have submitted at least one task");
       assert.ok(
-        submittedPrompts[0].includes("wave 0") || submittedPrompts[0].includes(".cc-pipeline/plan.md"),
-        "submitted prompt should reference wave context or plan"
+        submittedPrompts[0].includes("wave 0") || submittedPrompts[0].includes(`.cc-pipeline/${run.id}/plan.md`),
+        "submitted prompt should reference wave context or run-scoped plan"
       );
 
       fs.rmSync(repoDir, { recursive: true, force: true });

@@ -105,7 +105,7 @@ export class WorktreePool {
       const w = this.workers.get(name);
       if (!w) return { merged: false };
 
-      let result: { merged: boolean; conflictFiles?: string[] } = { merged: true };
+      let result: { merged: boolean; conflictFiles?: string[] } = { merged: false };
       if (merge) {
         try {
           result = await this.mergeToMain(w, taskId);
@@ -160,13 +160,10 @@ export class WorktreePool {
 
   /** Symlink node_modules from the main repo into the worktree so build tools work. */
   private ensureNodeModulesSymlink(worktreePath: string): void {
-    const mainNM = path.join(this.repoPath, "v1", "node_modules");
-    const wtNM = path.join(worktreePath, "v1", "node_modules");
+    const mainNM = path.join(this.repoPath, "node_modules");
+    const wtNM = path.join(worktreePath, "node_modules");
 
     if (!existsSync(mainNM)) return;
-
-    const wtV1 = path.join(worktreePath, "v1");
-    if (!existsSync(wtV1)) mkdirSync(wtV1, { recursive: true });
 
     try {
       const stat = lstatSync(wtNM);

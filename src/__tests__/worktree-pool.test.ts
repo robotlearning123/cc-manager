@@ -105,14 +105,36 @@ describe("WorktreePool", () => {
       assert.ok(worker !== null);
       assert.strictEqual(pool.available, 1);
 
-      await pool.release(worker.name, false);
+      const result = await pool.release(worker.name, false);
 
+      assert.deepStrictEqual(result, { merged: false });
       assert.strictEqual(pool.available, 2, "released worker should be available again");
       assert.strictEqual(pool.busy, 0, "no workers should remain busy");
 
       // Verify the worker is genuinely re-acquirable
       const reacquired = await pool.acquire();
       assert.ok(reacquired !== null, "worker should be acquirable after release");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("acquire() symlinks repo node_modules into the worktree root when available", async () => {
+    const { repoPath, cleanup } = await makeTempRepo();
+    try {
+      fs.mkdirSync(path.join(repoPath, "node_modules"), { recursive: true });
+      fs.writeFileSync(path.join(repoPath, "node_modules", ".keep"), "");
+
+      const pool = new WorktreePool(repoPath, 1);
+      await pool.init();
+
+      const worker = await pool.acquire();
+      assert.ok(worker !== null);
+
+      const linkedPath = path.join(worker.path, "node_modules");
+      assert.ok(fs.existsSync(linkedPath), "worktree should expose node_modules");
+      assert.ok(fs.lstatSync(linkedPath).isSymbolicLink(), "node_modules should be a symlink");
+      assert.strictEqual(fs.realpathSync(linkedPath), fs.realpathSync(path.join(repoPath, "node_modules")));
     } finally {
       cleanup();
     }

@@ -75,7 +75,8 @@ function getRepoContext(repoPath: string): RepoContext {
 export class Pipeline extends EventEmitter {
   private approveResolvers = new Map<string, () => void>();
   private _runConfigs = new Map<string, PipelineConfig>();
-  private _lastDecompose: DecomposeOutput | null = null;
+  private _lastDecompose = new Map<string, DecomposeOutput>();
+  private activeRuns = new Map<string, PipelineRun>();
 
   constructor(
     private runner: AgentRunner,
@@ -117,6 +118,7 @@ export class Pipeline extends EventEmitter {
       updatedAt: now,
     };
     this._runConfigs.set(run.id, runConfig);
+    this.activeRuns.set(run.id, run);
     this.pipelineStore.save(run);
     this.broadcast({ type: "pipeline:started", runId: run.id, goal });
 
@@ -127,6 +129,8 @@ export class Pipeline extends EventEmitter {
       this.pipelineStore.save(run);
       this.broadcast({ type: "pipeline:failed", runId: run.id, error: run.error });
       this._runConfigs.delete(run.id);
+      this._lastDecompose.delete(run.id);
+      this.activeRuns.delete(run.id);
     });
 
     return run;
@@ -149,12 +153,17 @@ export class Pipeline extends EventEmitter {
   }
 
   cancel(runId: string): boolean {
-    const run = this.pipelineStore.get(runId);
+    const run = this.activeRuns.get(runId) ?? this.pipelineStore.get(runId);
     if (!run || run.stage === "done" || run.stage === "failed") return false;
 
-    for (const taskId of run.taskIds) {
-      this.scheduler.cancel(taskId);
-    }
+    this.cancelTrackedTasks(run);
+    this._runConfigs.delete(runId);
+    this._lastDecompose.delete(runId);
+    this.activeRuns.delete(runId);
+    this.approveResolvers.delete(runId);
+    run.stage = "failed";
+    run.error = "Cancelled by user";
+    run.updatedAt = new Date().toISOString();
 
     this.emit(`cancel:${runId}`);
     this.pipelineStore.updateStage(runId, "failed", { error: "Cancelled by user" });
@@ -164,6 +173,30 @@ export class Pipeline extends EventEmitter {
 
   private cfg(runId: string): PipelineConfig {
     return this._runConfigs.get(runId) ?? this.config;
+  }
+
+  private async runMetaTask(run: PipelineRun, stage: string, prompt: string): Promise<Task> {
+    const task = createTask(prompt, { timeout: this.cfg(run.id).metaTaskTimeout, meta: true });
+    await this.runner.run(task, this.repoPath, (event) => {
+      this.broadcast({ type: `pipeline:${stage}:event`, runId: run.id, ...event });
+    });
+    if (task.status !== "success") {
+      const detail = task.error || task.output || task.status;
+      throw new Error(`${stage} task failed: ${detail}`);
+    }
+    return task;
+  }
+
+  private pipelineDir(runId: string): string {
+    return join(this.repoPath, ".cc-pipeline", runId);
+  }
+
+  private planPath(runId: string): string {
+    return join(this.pipelineDir(runId), "plan.md");
+  }
+
+  private tasksPath(runId: string): string {
+    return join(this.pipelineDir(runId), "tasks.json");
   }
 
   private async drive(run: PipelineRun): Promise<void> {
@@ -189,13 +222,15 @@ export class Pipeline extends EventEmitter {
     }
 
     this._runConfigs.delete(run.id);
+    this._lastDecompose.delete(run.id);
+    this.activeRuns.delete(run.id);
     if (run.stage === "done") {
       this.broadcast({ type: "pipeline:done", runId: run.id });
     }
   }
 
   private async doResearchPlan(run: PipelineRun, ctx: RepoContext): Promise<void> {
-    const pipelineDir = join(this.repoPath, ".cc-pipeline");
+    const pipelineDir = this.pipelineDir(run.id);
     mkdirSync(pipelineDir, { recursive: true });
 
     // Detect mode
@@ -229,9 +264,9 @@ export class Pipeline extends EventEmitter {
       `## Your Task`,
       `1. Read and understand the existing codebase (if augment mode)`,
       `2. Identify which files need to be created or modified`,
-      `3. Write a structured plan to .cc-pipeline/plan.md with this format:`,
+      `3. Write a structured plan to .cc-pipeline/${run.id}/plan.md with this format:`,
       ``,
-      `### Plan Format (write to .cc-pipeline/plan.md):`,
+      `### Plan Format (write to .cc-pipeline/${run.id}/plan.md):`,
       `# Implementation Plan`,
       `## Summary`,
       `[1-2 paragraph overview]`,
@@ -253,15 +288,11 @@ export class Pipeline extends EventEmitter {
       `then implementations, then tests, then integration.`,
     ].join("\n");
 
-    const cfg = this.cfg(run.id);
-    const task = createTask(prompt, { timeout: cfg.metaTaskTimeout });
-    await this.runner.run(task, this.repoPath, (event) => {
-      this.broadcast({ type: "pipeline:research_plan:event", runId: run.id, ...event });
-    });
+    await this.runMetaTask(run, "research_plan", prompt);
 
     this.broadcast({ type: "pipeline:plan_ready", runId: run.id });
 
-    if (!cfg.autoApprove) {
+    if (!this.cfg(run.id).autoApprove) {
       this.pipelineStore.updateStage(run.id, "waiting_approval");
       run.stage = "waiting_approval";
       this.broadcast({ type: "pipeline:waiting_approval", runId: run.id });
@@ -290,7 +321,7 @@ export class Pipeline extends EventEmitter {
   }
 
   private async doDecompose(run: PipelineRun, ctx: RepoContext): Promise<void> {
-    const planPath = join(this.repoPath, ".cc-pipeline", "plan.md");
+    const planPath = this.planPath(run.id);
     let planContent: string;
     try {
       planContent = readFileSync(planPath, "utf-8");
@@ -328,20 +359,18 @@ export class Pipeline extends EventEmitter {
       `}`,
     ].join("\n");
 
-    const task = createTask(prompt, { timeout: this.cfg(run.id).metaTaskTimeout });
-    const result = await this.runner.run(task, this.repoPath, (event) => {
-      this.broadcast({ type: "pipeline:decompose:event", runId: run.id, ...event });
-    });
+    const task = await this.runMetaTask(run, "decompose", prompt);
 
     const output = parseJsonFromOutput<DecomposeOutput>(
-      result.output ?? "",
+      task.output ?? "",
       (v): v is DecomposeOutput => Array.isArray((v as DecomposeOutput)?.waves),
     );
 
     const validated = validateWaves(output);
-    const pipelineDir = join(this.repoPath, ".cc-pipeline");
-    writeFileSync(join(pipelineDir, "tasks.json"), JSON.stringify(validated, null, 2));
-    this._lastDecompose = validated;
+    const pipelineDir = this.pipelineDir(run.id);
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(this.tasksPath(run.id), JSON.stringify(validated, null, 2));
+    this._lastDecompose.set(run.id, validated);
 
     this.pipelineStore.updateStage(run.id, "execute");
     run.stage = "execute";
@@ -349,22 +378,23 @@ export class Pipeline extends EventEmitter {
   }
 
   private async doExecute(run: PipelineRun): Promise<void> {
-    const decomposed = this._lastDecompose
-      ?? JSON.parse(readFileSync(join(this.repoPath, ".cc-pipeline", "tasks.json"), "utf-8")) as DecomposeOutput;
+    const decomposed = this._lastDecompose.get(run.id)
+      ?? JSON.parse(readFileSync(this.tasksPath(run.id), "utf-8")) as DecomposeOutput;
     const cfg = this.cfg(run.id);
 
     // Load plan for task context (truncate to keep prompts reasonable)
     let planContext = "";
     try {
-      const plan = readFileSync(join(this.repoPath, ".cc-pipeline", "plan.md"), "utf-8");
+      const plan = readFileSync(this.planPath(run.id), "utf-8");
       planContext = plan.length > 2000 ? plan.slice(0, 2000) + "\n...(truncated)" : plan;
     } catch { /* no plan file */ }
 
     for (const wave of decomposed.waves) {
+      if (run.stage === "failed") return;
       const submittedTasks: Task[] = [];
       for (const taskPrompt of wave.tasks) {
         const contextualPrompt = planContext
-          ? `## Context\nYou are executing wave ${wave.waveIndex} of a multi-wave pipeline.\nRead .cc-pipeline/plan.md for the full implementation plan.\n\n## Your Task\n${taskPrompt}`
+          ? `## Context\nYou are executing wave ${wave.waveIndex} of a multi-wave pipeline.\nRead .cc-pipeline/${run.id}/plan.md for the full implementation plan.\n\n## Your Task\n${taskPrompt}`
           : taskPrompt;
         const t = this.scheduler.submit(contextualPrompt, {
           timeout: cfg.codeTaskTimeout,
@@ -376,9 +406,14 @@ export class Pipeline extends EventEmitter {
         run.taskIds.push(t.id);
       }
 
+      // Persist task IDs once per wave (not per task)
+      run.updatedAt = new Date().toISOString();
+      this.pipelineStore.save(run);
+
       this.broadcast({ type: "pipeline:wave_started", runId: run.id, waveIndex: wave.waveIndex, taskCount: submittedTasks.length });
 
       const completed = await this.waitForTasks(submittedTasks.map((t) => t.id));
+      if ((run.stage as string) === "failed") return;
 
       const successCount = completed.filter((t) => t.status === "success").length;
       const waveResult: WaveResult = {
@@ -432,13 +467,10 @@ export class Pipeline extends EventEmitter {
       `Include file paths, line numbers, and the exact fix needed.`,
     ].join("\n");
 
-    const task = createTask(prompt, { timeout: this.cfg(run.id).metaTaskTimeout });
-    const result = await this.runner.run(task, this.repoPath, (event) => {
-      this.broadcast({ type: "pipeline:verify:event", runId: run.id, ...event });
-    });
+    const task = await this.runMetaTask(run, "verify", prompt);
 
     const output = parseJsonFromOutput<VerifyOutput>(
-      result.output ?? "",
+      task.output ?? "",
       (v): v is VerifyOutput => typeof (v as VerifyOutput)?.verdict === "string",
     );
 
@@ -482,9 +514,11 @@ export class Pipeline extends EventEmitter {
         this.broadcast({ type: "pipeline:failed", runId: run.id, error: run.error });
       } else {
         // Generate fix tasks from verify errors instead of re-running original tasks
-        this._lastDecompose = this.buildFixTasks(output.errors, run.iteration);
-        const pipelineDir = join(this.repoPath, ".cc-pipeline");
-        writeFileSync(join(pipelineDir, "tasks.json"), JSON.stringify(this._lastDecompose, null, 2));
+        const nextDecompose = this.buildFixTasks(output.errors, run.iteration);
+        this._lastDecompose.set(run.id, nextDecompose);
+        const pipelineDir = this.pipelineDir(run.id);
+        mkdirSync(pipelineDir, { recursive: true });
+        writeFileSync(this.tasksPath(run.id), JSON.stringify(nextDecompose, null, 2));
         this.pipelineStore.updateStage(run.id, "execute", { iteration: run.iteration });
         run.stage = "execute";
         this.broadcast({ type: "pipeline:retry", runId: run.id, iteration: run.iteration, errors: output.errors, totalSpent });
@@ -545,6 +579,13 @@ export class Pipeline extends EventEmitter {
     }
 
     return results;
+  }
+
+  private cancelTrackedTasks(run: PipelineRun): void {
+    for (const taskId of run.taskIds) {
+      this.scheduler.cancel(taskId);
+      this.scheduler.abort(taskId);
+    }
   }
 }
 

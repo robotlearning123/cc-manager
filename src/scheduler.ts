@@ -19,6 +19,7 @@ export class Scheduler {
   private progressIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private dispatchResolve?: () => void;
   private abortedTasks = new Set<string>();
+  private cancelledTasks = new Set<string>();
 
   setTotalBudgetLimit(usd: number): void {
     this.totalBudgetLimit = usd;
@@ -135,6 +136,15 @@ export class Scheduler {
     task.completedAt = new Date().toISOString();
     this.queue = this.queue.filter((t) => t.id !== id);
     this.store.save(task);
+    return true;
+  }
+
+  abort(id: string): boolean {
+    const task = this.tasks.get(id) ?? this.store.get(id) ?? undefined;
+    if (!task || task.status !== "running") return false;
+    const aborted = this.runner.abort(id);
+    if (!aborted) return false;
+    this.cancelledTasks.add(id);
     return true;
   }
 
@@ -507,6 +517,8 @@ export class Scheduler {
           task.review = review;
           if (!review.approve) {
             shouldMerge = false;
+            task.status = "failed";
+            task.mergeGate = { executionPassed: true, reviewApproved: false, reviewedAt: new Date().toISOString() };
             task.error = review.issues.length > 0
               ? `review rejected (score ${review.score}): ${review.issues.join("; ")}`
               : `review rejected (score ${review.score})`;
@@ -517,12 +529,20 @@ export class Scheduler {
             });
             this.onEvent?.({ type: "review_rejected", taskId: task.id, score: review.score, issues: review.issues });
           } else {
+            task.mergeGate = { executionPassed: true, reviewApproved: true, reviewedAt: new Date().toISOString() };
             log("info", "cross-agent review approved merge", { taskId: task.id, score: review.score });
             this.onEvent?.({ type: "review_approved", taskId: task.id, score: review.score });
           }
         }
       }
       const mergeResult = await this.pool.release(workerName, shouldMerge, task.id);
+
+      // Update mergeGate with merge result
+      if (task.mergeGate && mergeResult.merged) {
+        task.mergeGate.mergeEligible = true;
+        task.mergeGate.merged = true;
+        task.mergeGate.mergedAt = new Date().toISOString();
+      }
 
       // After successful merge, rebase all other active workers onto new main
       if (shouldMerge && mergeResult.merged) {
@@ -535,6 +555,12 @@ export class Scheduler {
       }
 
       if (shouldMerge && !mergeResult.merged) {
+        task.status = "failed";
+        if (task.mergeGate) {
+          task.mergeGate.mergeEligible = true;
+          task.mergeGate.merged = false;
+          task.mergeGate.conflictFiles = mergeResult.conflictFiles;
+        }
         const fileList = mergeResult.conflictFiles?.length
           ? `: ${mergeResult.conflictFiles.join(", ")}`
           : "";
@@ -554,8 +580,16 @@ export class Scheduler {
         clearInterval(interval);
         this.progressIntervals.delete(task.id);
       }
-      // If stale recovery flagged this task, force timeout status and skip retry
-      if (this.abortedTasks.has(task.id)) {
+      // If user cancelled this task via abort(), mark cancelled — but only if
+      // a failure path (review rejection, merge conflict) hasn't already set a status
+      if (this.cancelledTasks.has(task.id)) {
+        this.cancelledTasks.delete(task.id);
+        if (task.status === "running") {
+          task.status = "cancelled";
+          task.error = "Cancelled by user";
+          task.completedAt = new Date().toISOString();
+        }
+      } else if (this.abortedTasks.has(task.id)) {
         this.abortedTasks.delete(task.id);
         task.status = "timeout";
         task.error = "Task exceeded timeout + grace period and was forcefully recovered";

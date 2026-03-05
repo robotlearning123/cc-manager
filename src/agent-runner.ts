@@ -249,6 +249,10 @@ export class AgentRunner {
   }
 
   buildSystemPrompt(task: Task, cwd: string = process.cwd()): string {
+    if (task.meta) {
+      return "";
+    }
+
     const parts: string[] = [];
 
     // Inject Development Rules from CLAUDE.md if present
@@ -351,7 +355,7 @@ export class AgentRunner {
     }
 
     // F1: Empty commit detection — agent exited 0 but produced no commits
-    if ((task.status as string) === "success") {
+    if (!task.meta && (task.status as string) === "success") {
       try {
         const { stdout: commits } = await execAsync("git log main..HEAD --oneline", { cwd, encoding: "utf8" });
         if (!commits.trim()) {
@@ -365,7 +369,7 @@ export class AgentRunner {
     }
 
     // Post-execution build verification — tsc failure blocks merge
-    if ((task.status as string) === "success") {
+    if (!task.meta && (task.status as string) === "success") {
       const buildResult = await this.verifyBuild(cwd);
       if (!buildResult.ok) {
         task.status = "failed";
@@ -784,6 +788,10 @@ export class AgentRunner {
 
   /** Build the full task prompt with instructions appended. */
   private buildTaskPrompt(task: Task, cwd: string = process.cwd()): string {
+    if (task.meta) {
+      return task.prompt;
+    }
+
     const lang = this.detectLanguage(cwd);
     const lines: string[] = [
       `${task.prompt}`,

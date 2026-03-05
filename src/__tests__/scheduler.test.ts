@@ -24,6 +24,7 @@ function makeRunner(): AgentRunner {
     run: async (task: Task) => { task.status = "success"; task.durationMs = 100; return task; },
     getRunningTasks: () => [],
     reviewDiffWithAgent: async () => ({ approve: true, score: 80, issues: [], suggestions: [] }),
+    abort: () => true,
   } as unknown as AgentRunner;
 }
 
@@ -95,6 +96,23 @@ describe("Scheduler", () => {
     assert.strictEqual(result, true);
     assert.strictEqual(s.getQueueDepth(), 0);
     assert.strictEqual(s.getTask(task.id)?.status, "cancelled");
+  });
+
+  it("abort() returns true for a running task when runner abort succeeds", () => {
+    let abortedId = "";
+    const runner = {
+      ...makeRunner(),
+      abort: (id: string) => {
+        abortedId = id;
+        return true;
+      },
+    } as unknown as AgentRunner;
+    const s = new Scheduler(makePool(), runner, makeStore());
+    const task = s.submit("running task");
+    task.status = "running";
+
+    assert.strictEqual(s.abort(task.id), true);
+    assert.strictEqual(abortedId, task.id);
   });
 
   it("getStats() returns correct counts with multiple tasks and pool state", () => {
@@ -912,11 +930,12 @@ describe("Scheduler", () => {
 
       // Manually invoke executeAndRelease
       const task = s.submit("test review gate");
+      task.maxRetries = 0; // assert direct terminal state instead of retry queue behavior
       const exec = (s as any).executeAndRelease.bind(s);
       await exec(task, "w0", "/tmp/w0");
 
-      // Task should still be "success" (review doesn't change status)
-      assert.strictEqual(task.status, "success");
+      // Review rejection should convert the task into a failure so retry/wave accounting is correct
+      assert.strictEqual(task.status, "failed");
       // But merge should have been blocked
       assert.strictEqual(mergeCalledWith, false);
       // Review should be attached to task
@@ -928,6 +947,46 @@ describe("Scheduler", () => {
       // Should have emitted review_started and review_rejected events
       assert.ok(events.some(e => e.type === "review_started"), "should emit review_started");
       assert.ok(events.some(e => e.type === "review_rejected"), "should emit review_rejected");
+    });
+
+    it("marks task failed when merge returns conflict", async () => {
+      const pool = {
+        ...makePool(),
+        release: async (_name: string, merge: boolean) => {
+          assert.strictEqual(merge, true);
+          return { merged: false, conflictFiles: ["src/foo.ts"] };
+        },
+      } as unknown as WorktreePool;
+
+      const runner = {
+        run: async (task: Task) => {
+          task.status = "success";
+          task.durationMs = 100;
+          task.events.push({
+            type: "git_diff",
+            timestamp: new Date().toISOString(),
+            data: { diff: "diff --git a/foo.ts\n+const x = 1;" },
+          });
+          return task;
+        },
+        getRunningTasks: () => [],
+        reviewDiffWithAgent: async () => ({
+          approve: true,
+          score: 90,
+          issues: [],
+          suggestions: [],
+        }),
+      } as unknown as AgentRunner;
+
+      const s = new Scheduler(pool, runner, makeStore());
+      const task = s.submit("merge conflict path");
+      task.maxRetries = 0; // assert terminal state directly
+      const exec = (s as any).executeAndRelease.bind(s);
+      await exec(task, "w0", "/tmp/w0");
+
+      assert.strictEqual(task.status, "failed");
+      assert.ok(task.error.includes("Merge conflict"));
+      assert.ok(task.error.includes("src/foo.ts"));
     });
 
     it("review gate allows merge when review approves", async () => {

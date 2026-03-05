@@ -5,6 +5,7 @@ import { createTask } from "../types.js";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 describe("AgentRunner", () => {
   // Temp directories for language detection tests
@@ -417,6 +418,41 @@ describe("AgentRunner", () => {
     const prompt = (runner as unknown as { buildTaskPrompt: (t: typeof task, cwd: string) => string }).buildTaskPrompt(task, "/tmp");
     assert.ok(prompt.includes("CRITICAL"), "prompt should contain CRITICAL commit warning");
     assert.ok(prompt.includes("MUST run"), "prompt should enforce git commit");
+  });
+
+  it("buildTaskPrompt returns the raw prompt for meta tasks", () => {
+    const runner = new AgentRunner();
+    const task = createTask("plan the work only", { meta: true });
+    const prompt = (runner as unknown as { buildTaskPrompt: (t: typeof task, cwd: string) => string }).buildTaskPrompt(task, tsDir);
+    assert.strictEqual(prompt, "plan the work only");
+  });
+
+  it("buildSystemPrompt omits coding-task instructions for meta tasks", () => {
+    const runner = new AgentRunner();
+    const task = createTask("research the repository", { meta: true });
+    const prompt = runner.buildSystemPrompt(task, tsDir);
+    assert.strictEqual(prompt, "");
+  });
+
+  it("run() lets a meta task succeed without commits or build verification", async () => {
+    const runner = new AgentRunner();
+    const repoDir = mkdtempSync(join(tmpdir(), "meta-runner-repo-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
+      writeFileSync(join(repoDir, "tsconfig.json"), JSON.stringify({ include: ["src/**/*.ts"] }));
+      execFileSync("git", ["add", "."], { cwd: repoDir });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir });
+
+      const task = createTask("research the repository", { agent: "echo", timeout: 5, meta: true });
+      await runner.run(task, repoDir);
+
+      assert.strictEqual(task.status, "success");
+      assert.ok(task.output.includes("research the repository"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   // ── F4: Complete pricing table ──
