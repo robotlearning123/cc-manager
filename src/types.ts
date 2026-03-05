@@ -36,6 +36,7 @@ export interface Task {
   webhookUrl?: string;
   summary?: string;
   agent?: string;
+  model?: string;
   review?: ReviewResult;
 }
 
@@ -168,7 +169,7 @@ export interface FlywheelState {
   lastAnalysis: EvolutionEntry | undefined;
 }
 
-export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "timeout" | "maxBudget" | "maxRetries" | "priority" | "dependsOn" | "tags" | "webhookUrl" | "agent">>): Task {
+export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "timeout" | "maxBudget" | "maxRetries" | "priority" | "dependsOn" | "tags" | "webhookUrl" | "agent" | "model">>): Task {
   return {
     id: opts?.id ?? crypto.randomUUID().replace(/-/g, "").slice(0, 16),
     prompt,
@@ -190,5 +191,6 @@ export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "tim
     tags: opts?.tags,
     webhookUrl: opts?.webhookUrl,
     agent: opts?.agent ?? "claude",
+    model: opts?.model,
   };
 }
