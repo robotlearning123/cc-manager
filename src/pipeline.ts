@@ -74,6 +74,7 @@ function getRepoContext(repoPath: string): RepoContext {
 
 export class Pipeline extends EventEmitter {
   private approveResolvers = new Map<string, () => void>();
+  private _runConfigs = new Map<string, PipelineConfig>();
   private _lastDecompose: DecomposeOutput | null = null;
 
   constructor(
@@ -88,14 +89,17 @@ export class Pipeline extends EventEmitter {
   }
 
   start(goal: string, configOverrides?: Record<string, unknown>): PipelineRun {
-    // Apply per-run config overrides
+    // Apply per-run config overrides via schema-driven merge
     const runConfig = { ...this.config };
     if (configOverrides) {
-      if (typeof configOverrides.maxIterations === "number") runConfig.maxIterations = configOverrides.maxIterations;
-      if (typeof configOverrides.autoApprove === "boolean") runConfig.autoApprove = configOverrides.autoApprove;
-      if (typeof configOverrides.codeTaskBudget === "number") runConfig.codeTaskBudget = configOverrides.codeTaskBudget;
-      if (typeof configOverrides.codeTaskTimeout === "number") runConfig.codeTaskTimeout = configOverrides.codeTaskTimeout;
-      if (typeof configOverrides.metaTaskTimeout === "number") runConfig.metaTaskTimeout = configOverrides.metaTaskTimeout;
+      const schema: Record<string, "number" | "boolean"> = {
+        maxIterations: "number", metaTaskTimeout: "number",
+        codeTaskTimeout: "number", codeTaskBudget: "number", autoApprove: "boolean",
+      };
+      for (const [k, t] of Object.entries(schema)) {
+        const v = configOverrides[k];
+        if (typeof v === t) (runConfig as Record<string, unknown>)[k] = v;
+      }
     }
 
     const now = new Date().toISOString();
@@ -111,15 +115,17 @@ export class Pipeline extends EventEmitter {
       createdAt: now,
       updatedAt: now,
     };
+    this._runConfigs.set(run.id, runConfig);
     this.pipelineStore.save(run);
     this.broadcast({ type: "pipeline:started", runId: run.id, goal });
 
-    this.drive(run, runConfig).catch((err) => {
+    this.drive(run).catch((err) => {
       run.stage = "failed";
       run.error = err instanceof Error ? err.message : String(err);
       run.updatedAt = new Date().toISOString();
       this.pipelineStore.save(run);
       this.broadcast({ type: "pipeline:failed", runId: run.id, error: run.error });
+      this._runConfigs.delete(run.id);
     });
 
     return run;
@@ -155,33 +161,39 @@ export class Pipeline extends EventEmitter {
     return true;
   }
 
-  private async drive(run: PipelineRun, runConfig?: PipelineConfig): Promise<void> {
-    const cfg = runConfig ?? this.config;
+  private cfg(runId: string): PipelineConfig {
+    return this._runConfigs.get(runId) ?? this.config;
+  }
+
+  private async drive(run: PipelineRun): Promise<void> {
+    let ctx = getRepoContext(this.repoPath);
     while (run.stage !== "done" && run.stage !== "failed") {
       switch (run.stage) {
         case "research_plan":
-          await this.doResearchPlan(run, cfg);
+          await this.doResearchPlan(run, ctx);
           break;
         case "waiting_approval":
           return; // doResearchPlan handles resumption
         case "decompose":
-          await this.doDecompose(run, cfg);
+          await this.doDecompose(run, ctx);
           break;
         case "execute":
-          await this.doExecute(run, cfg);
+          await this.doExecute(run);
           break;
         case "verify":
-          await this.doVerify(run, cfg);
+          ctx = getRepoContext(this.repoPath); // refresh after execute modifies repo
+          await this.doVerify(run, ctx);
           break;
       }
     }
 
+    this._runConfigs.delete(run.id);
     if (run.stage === "done") {
       this.broadcast({ type: "pipeline:done", runId: run.id });
     }
   }
 
-  private async doResearchPlan(run: PipelineRun, cfg: PipelineConfig): Promise<void> {
+  private async doResearchPlan(run: PipelineRun, ctx: RepoContext): Promise<void> {
     const pipelineDir = join(this.repoPath, ".cc-pipeline");
     mkdirSync(pipelineDir, { recursive: true });
 
@@ -193,7 +205,6 @@ export class Pipeline extends EventEmitter {
       run.mode = "greenfield";
     }
 
-    const ctx = getRepoContext(this.repoPath);
     const modeInstructions = run.mode === "greenfield"
       ? `This is a NEW empty repository. You must design the architecture from scratch.\nCreate the initial project structure, choose frameworks, and define conventions.`
       : `This is an EXISTING repository. Study the codebase before proposing changes.\nPreserve existing patterns, conventions, and architecture unless the goal requires changes.`;
@@ -241,6 +252,7 @@ export class Pipeline extends EventEmitter {
       `then implementations, then tests, then integration.`,
     ].join("\n");
 
+    const cfg = this.cfg(run.id);
     const task = createTask(prompt, { timeout: cfg.metaTaskTimeout });
     await this.runner.run(task, this.repoPath, (event) => {
       this.broadcast({ type: "pipeline:research_plan:event", runId: run.id, ...event });
@@ -276,7 +288,7 @@ export class Pipeline extends EventEmitter {
     run.stage = "decompose";
   }
 
-  private async doDecompose(run: PipelineRun, cfg: PipelineConfig): Promise<void> {
+  private async doDecompose(run: PipelineRun, ctx: RepoContext): Promise<void> {
     const planPath = join(this.repoPath, ".cc-pipeline", "plan.md");
     let planContent: string;
     try {
@@ -284,8 +296,6 @@ export class Pipeline extends EventEmitter {
     } catch {
       planContent = run.goal;
     }
-
-    const ctx = getRepoContext(this.repoPath);
 
     const prompt = [
       `You are a task decomposition agent. Convert the plan into executable task prompts.`,
@@ -317,7 +327,7 @@ export class Pipeline extends EventEmitter {
       `}`,
     ].join("\n");
 
-    const task = createTask(prompt, { timeout: cfg.metaTaskTimeout });
+    const task = createTask(prompt, { timeout: this.cfg(run.id).metaTaskTimeout });
     const result = await this.runner.run(task, this.repoPath, (event) => {
       this.broadcast({ type: "pipeline:decompose:event", runId: run.id, ...event });
     });
@@ -336,9 +346,10 @@ export class Pipeline extends EventEmitter {
     this.broadcast({ type: "pipeline:decomposed", runId: run.id, waves: output.waves.length, totalTasks: output.totalTasks });
   }
 
-  private async doExecute(run: PipelineRun, cfg: PipelineConfig): Promise<void> {
+  private async doExecute(run: PipelineRun): Promise<void> {
     const decomposed = this._lastDecompose
       ?? JSON.parse(readFileSync(join(this.repoPath, ".cc-pipeline", "tasks.json"), "utf-8")) as DecomposeOutput;
+    const cfg = this.cfg(run.id);
 
     // Load plan for task context (truncate to keep prompts reasonable)
     let planContext = "";
@@ -384,8 +395,7 @@ export class Pipeline extends EventEmitter {
     run.stage = "verify";
   }
 
-  private async doVerify(run: PipelineRun, cfg: PipelineConfig): Promise<void> {
-    const ctx = getRepoContext(this.repoPath);
+  private async doVerify(run: PipelineRun, ctx: RepoContext): Promise<void> {
     const verifyCommands = ctx.language === "typescript"
       ? `1. Run: npx tsc --noEmit 2>&1\n2. Run: npm test 2>&1`
       : ctx.language === "python"
@@ -420,7 +430,7 @@ export class Pipeline extends EventEmitter {
       `Include file paths, line numbers, and the exact fix needed.`,
     ].join("\n");
 
-    const task = createTask(prompt, { timeout: cfg.metaTaskTimeout });
+    const task = createTask(prompt, { timeout: this.cfg(run.id).metaTaskTimeout });
     const result = await this.runner.run(task, this.repoPath, (event) => {
       this.broadcast({ type: "pipeline:verify:event", runId: run.id, ...event });
     });
