@@ -385,6 +385,29 @@ export class WorktreePool {
     return { total, busy, available: total - busy, stale };
   }
 
+  getActiveWorkers(exclude?: string): string[] {
+    const result: string[] = [];
+    for (const w of this.workers.values()) {
+      if (w.busy && w.name !== exclude) result.push(w.name);
+    }
+    return result;
+  }
+
+  async rebaseOnMain(workerName: string): Promise<boolean> {
+    const w = this.workers.get(workerName);
+    if (!w) return false;
+    try {
+      const { stdout } = await this.git("rev-parse", "main");
+      const mainSha = stdout.trim();
+      await this.gitIn(w.path, "rebase", mainSha);
+    } catch (err) {
+      await this.gitIn(w.path, "rebase", "--abort").catch(() => {});
+      log("warn", "[pool] rebaseOnMain: conflict, aborted", { worker: workerName });
+      return false;
+    }
+    return true;
+  }
+
   private async git(...args: string[]) {
     return exec("git", args, { cwd: this.repoPath });
   }
