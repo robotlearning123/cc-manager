@@ -50,6 +50,7 @@ export class WebServer {
   private app = new Hono();
   private sseClients = new Set<(data: string) => void>();
   private _scheduler!: Scheduler;
+  private _pipeline!: import("./pipeline.js").Pipeline;
   private rateLimitStore = new Map<string, { count: number; resetAt: number }>();
 
   constructor(
@@ -88,6 +89,10 @@ export class WebServer {
 
   setScheduler(scheduler: Scheduler): void {
     this._scheduler = scheduler;
+  }
+
+  setPipeline(pipeline: import("./pipeline.js").Pipeline): void {
+    this._pipeline = pipeline;
   }
 
   private get store(): Store {
@@ -751,9 +756,80 @@ export class WebServer {
             },
             exampleResponse: { version: "1.0.0", description: "…", endpoints: ["…"] },
           },
+          {
+            method: "POST",
+            path: "/api/pipeline",
+            description: "Start an autonomous pipeline run. Provide a goal (one sentence) and optional config overrides. Returns the run ID and initial stage.",
+            requestBody: {
+              goal: "string – required, the high-level goal",
+              config: "object – optional overrides: { maxIterations?, autoApprove?, codeTaskBudget?, codeTaskTimeout?, metaTaskTimeout? }",
+            },
+            exampleRequest: {
+              method: "POST",
+              url: "/api/pipeline",
+              body: { goal: "Create a REST API for user management with tests", config: { autoApprove: true } },
+            },
+            exampleResponse: { id: "abc-123", stage: "research_plan" },
+          },
+          {
+            method: "GET",
+            path: "/api/pipeline",
+            description: "List all pipeline runs, newest first.",
+          },
+          {
+            method: "GET",
+            path: "/api/pipeline/:id",
+            description: "Get full details of a pipeline run including stage, waves, task IDs, verify results, and errors.",
+          },
+          {
+            method: "POST",
+            path: "/api/pipeline/:id/approve",
+            description: "Approve the plan checkpoint for a pipeline run in waiting_approval stage.",
+          },
+          {
+            method: "POST",
+            path: "/api/pipeline/:id/cancel",
+            description: "Cancel a running pipeline and all its pending tasks.",
+          },
         ],
       };
       return c.json(docs);
+    });
+
+    // Pipeline API
+    app.post("/api/pipeline", async (c) => {
+      let body: { goal?: unknown; config?: unknown };
+      try {
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: "bad json" }, 400);
+      }
+      if (typeof body.goal !== "string" || body.goal.trim() === "") {
+        return c.json({ error: "goal is required and must be a non-empty string" }, 400);
+      }
+      const configOverrides = body.config && typeof body.config === "object" ? body.config as Record<string, unknown> : undefined;
+      const run = this._pipeline.start(body.goal, configOverrides);
+      return c.json({ id: run.id, stage: run.stage }, 201);
+    });
+
+    app.get("/api/pipeline", (c) => {
+      return c.json(this._pipeline.list());
+    });
+
+    app.get("/api/pipeline/:id", (c) => {
+      const run = this._pipeline.get(c.req.param("id"));
+      if (!run) return c.json({ error: "not found" }, 404);
+      return c.json(run);
+    });
+
+    app.post("/api/pipeline/:id/approve", (c) => {
+      const ok = this._pipeline.approve(c.req.param("id"));
+      return ok ? c.json({ ok: true }) : c.json({ error: "no pending approval for this run" }, 400);
+    });
+
+    app.post("/api/pipeline/:id/cancel", (c) => {
+      const ok = this._pipeline.cancel(c.req.param("id"));
+      return ok ? c.json({ ok: true }) : c.json({ error: "pipeline not found or already terminal" }, 400);
     });
   }
 

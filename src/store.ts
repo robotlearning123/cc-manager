@@ -551,6 +551,10 @@ export class Store {
     }));
   }
 
+  getDb(): import("better-sqlite3").Database {
+    return this.db;
+  }
+
   close(): void {
     this.db.close();
   }

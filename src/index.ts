@@ -7,6 +7,9 @@ import { Store } from "./store.js";
 import { Scheduler } from "./scheduler.js";
 import { WebServer } from "./server.js";
 import { setLogLevel } from "./logger.js";
+import { Pipeline } from "./pipeline.js";
+import { PipelineStore } from "./pipeline-store.js";
+import { defaultPipelineConfig } from "./pipeline-types.js";
 
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -85,6 +88,19 @@ async function main() {
   });
 
   server.setScheduler(scheduler);
+
+  const pipelineStore = new PipelineStore(store.getDb());
+  const staleCount = pipelineStore.markStaleRunsFailed();
+  if (staleCount > 0) {
+    console.log(`  Recovered ${staleCount} stale pipeline run(s) from previous session`);
+  }
+  const pipeline = new Pipeline(runner, scheduler, pipelineStore, opts.repo, (e) => server.broadcast(e), {
+    ...defaultPipelineConfig,
+    metaTaskTimeout: parseInt(opts.timeout),
+    codeTaskTimeout: parseInt(opts.timeout),
+    codeTaskBudget: parseFloat(opts.budget),
+  });
+  server.setPipeline(pipeline);
 
   const totalBudget = parseFloat(opts.totalBudget);
   if (totalBudget > 0) {

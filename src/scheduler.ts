@@ -68,8 +68,8 @@ export class Scheduler {
     }
   }
 
-  submit(prompt: string, opts?: { id?: string; timeout?: number; maxBudget?: number; priority?: import("./types.js").TaskPriority; dependsOn?: string; webhookUrl?: string; tags?: string[]; agent?: string }): Task {
-    if (prompt.length > 2000) {
+  submit(prompt: string, opts?: { id?: string; timeout?: number; maxBudget?: number; priority?: import("./types.js").TaskPriority; dependsOn?: string; webhookUrl?: string; tags?: string[]; agent?: string; allowLongPrompt?: boolean }): Task {
+    if (!opts?.allowLongPrompt && prompt.length > 2000) {
       log("warn", "prompt exceeds context budget, truncating", { originalLength: prompt.length });
       prompt = prompt.slice(0, 2000);
     }
@@ -483,7 +483,9 @@ export class Scheduler {
           task.review = review;
           if (!review.approve) {
             shouldMerge = false;
-            task.error = `review rejected (score ${review.score}): ${review.issues.join("; ")}`;
+            task.error = review.issues.length > 0
+              ? `review rejected (score ${review.score}): ${review.issues.join("; ")}`
+              : `review rejected (score ${review.score})`;
             log("info", "cross-agent review rejected merge", {
               taskId: task.id,
               score: review.score,

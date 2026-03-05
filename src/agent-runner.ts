@@ -149,7 +149,7 @@ export class AgentRunner {
           status: reviewTask.status,
           error: reviewTask.error,
         });
-        return this.reviewDiff(diff);
+        return { ...this.reviewDiff(diff), reviewAgent: `${reviewAgent} (fallback)` };
       }
 
       // Parse the JSON response from the review agent
@@ -166,11 +166,11 @@ export class AgentRunner {
       }
 
       log("warn", "cross-agent review response unparseable, falling back to heuristic");
-      return this.reviewDiff(diff);
+      return { ...this.reviewDiff(diff), reviewAgent: `${reviewAgent} (fallback)` };
     } catch (err: unknown) {
       const msg = (err as Error).message ?? String(err);
       log("warn", "cross-agent review failed, falling back to heuristic", { error: msg });
-      return this.reviewDiff(diff);
+      return { ...this.reviewDiff(diff), reviewAgent: `${reviewAgent} (fallback)` };
     }
   }
 
