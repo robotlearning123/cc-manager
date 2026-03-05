@@ -500,7 +500,7 @@ describe("Pipeline", () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-full-"));
       // Initialize as git repo for augment mode detection
       const { execSync } = await import("node:child_process");
-      execSync("git init && git commit --allow-empty -m 'init'", { cwd: repoDir, stdio: "ignore" });
+      execSync("git init && git config user.email 'test@test.com' && git config user.name 'test' && git commit --allow-empty -m 'init'", { cwd: repoDir, stdio: "ignore" });
 
       const events: Record<string, unknown>[] = [];
 
