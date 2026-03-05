@@ -38,6 +38,7 @@ export interface Task {
   agent?: string;
   model?: string;
   modelOverride?: string;
+  sessionId?: string;
   review?: ReviewResult;
   _originalPrompt?: string;
 }

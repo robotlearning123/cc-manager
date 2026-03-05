@@ -28,7 +28,7 @@ describe("classifyTask", () => {
   it("deep: contains refactor keyword", () => {
     const r = classifyTask("Refactor the authentication module to use OAuth2 instead of basic auth");
     assert.strictEqual(r.category, "deep");
-    assert.ok(r.model.includes("opus"));
+    assert.ok(r.model.includes("opus") || r.model.includes("gpt"));
     assert.strictEqual(r.timeout, 600);
     assert.strictEqual(r.maxBudget, 10);
   });
@@ -73,6 +73,35 @@ describe("classifyTask", () => {
     // Same file mentioned twice should count as 1
     const r = classifyTask("Fix src/app.ts line 10 and src/app.ts line 20");
     assert.strictEqual(r.category, "quick"); // short + 1 unique file
+  });
+
+  // F7: agent + contextProfile routing
+  it("returns agent and contextProfile fields", () => {
+    const r = classifyTask("Fix typo in src/index.ts");
+    assert.strictEqual(r.agent, "claude");
+    assert.strictEqual(r.contextProfile, "default");
+  });
+
+  it("deep + scheduler keyword routes to codex with wide context", () => {
+    const r = classifyTask("Refactor the scheduler integration to support cross-file dependency resolution across src/scheduler.ts, src/types.ts, and src/store.ts");
+    assert.strictEqual(r.category, "deep");
+    assert.strictEqual(r.agent, "codex");
+    assert.strictEqual(r.contextProfile, "wide");
+    assert.strictEqual(r.model, "gpt-5.4");
+  });
+
+  it("deep without integration keywords routes to claude opus", () => {
+    const r = classifyTask("Redesign the database schema for better performance");
+    assert.strictEqual(r.category, "deep");
+    assert.strictEqual(r.agent, "claude");
+    assert.strictEqual(r.contextProfile, "default");
+    assert.ok(r.model.includes("opus"));
+  });
+
+  it("standard tasks always route to claude", () => {
+    const r = classifyTask("Add a new endpoint to handle user authentication in src/server.ts. The endpoint should validate JWT tokens and refresh them automatically when expired. Also handle rate limiting and error responses properly for all edge cases.");
+    assert.strictEqual(r.agent, "claude");
+    assert.strictEqual(r.contextProfile, "default");
   });
 });
 

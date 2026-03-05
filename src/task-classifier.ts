@@ -3,6 +3,8 @@ export function classifyTask(prompt: string): {
   model: string;
   timeout: number;
   maxBudget: number;
+  agent: 'claude' | 'codex';
+  contextProfile: 'default' | 'wide';
 } {
   // Extract file paths: must contain a directory separator (e.g., src/foo.ts, ./bar.js)
   const fileTokens = prompt.match(/((?:\.\/|[\w-]+\/)+[\w.-]+\.(?:ts|js|tsx|jsx|py|rs|go|java|rb|sh|css|html))(?=[^a-zA-Z]|$)/gm) || [];
@@ -11,13 +13,22 @@ export function classifyTask(prompt: string): {
 
   // Deep check first: keywords or many files
   if (/\b(refactor|redesign|architect)\b/i.test(prompt) || fileCount >= 3) {
-    return { category: 'deep', model: 'claude-opus-4-6', timeout: 600, maxBudget: 10 };
+    // F7: Route deep tasks with large-file indicators to Codex + GPT-5.4 wide
+    const needsWideContext = /\b(scheduler|integration|monorepo|cross-file)\b/i.test(prompt) || fileCount >= 5;
+    return {
+      category: 'deep',
+      model: needsWideContext ? 'gpt-5.4' : 'claude-opus-4-6',
+      timeout: 600,
+      maxBudget: 10,
+      agent: needsWideContext ? 'codex' : 'claude',
+      contextProfile: needsWideContext ? 'wide' : 'default',
+    };
   }
 
   // Quick: short prompt with at most 1 file
   if (prompt.length < 200 && fileCount <= 1) {
-    return { category: 'quick', model: 'claude-haiku-4-5-20251001', timeout: 120, maxBudget: 1 };
+    return { category: 'quick', model: 'claude-haiku-4-5-20251001', timeout: 120, maxBudget: 1, agent: 'claude', contextProfile: 'default' };
   }
 
-  return { category: 'standard', model: 'claude-sonnet-4-6', timeout: 300, maxBudget: 5 };
+  return { category: 'standard', model: 'claude-sonnet-4-6', timeout: 300, maxBudget: 5, agent: 'claude', contextProfile: 'default' };
 }

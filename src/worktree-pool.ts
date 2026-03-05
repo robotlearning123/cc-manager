@@ -216,6 +216,8 @@ export class WorktreePool {
     }
 
     await this.resetWorktree(w);
+    // F3: Sync main worktree after merge so files match HEAD
+    await this.syncMainWorktree();
     return { merged: true };
   }
 
@@ -254,7 +256,18 @@ export class WorktreePool {
 
     await this.cleanupTmpBranch(w, tmpBranch);
     await this.resetWorktree(w);
+    // F3: Sync main worktree after squash merge
+    await this.syncMainWorktree();
     return { merged: true };
+  }
+
+  /** F3: Sync main working directory to match HEAD after merges from worker branches. */
+  private async syncMainWorktree(): Promise<void> {
+    try {
+      await this.git("checkout", "HEAD", "--", ".");
+    } catch (err) {
+      log("warn", "[pool] syncMainWorktree failed", { err: String(err) });
+    }
   }
 
   private async cleanupTmpBranch(w: WorkerInfo, tmpBranch: string): Promise<void> {
