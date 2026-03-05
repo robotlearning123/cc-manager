@@ -3,7 +3,9 @@ import { log } from "./logger.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 
 const execAsync = promisify(execCb);
 
@@ -64,8 +66,12 @@ export class AgentRunner {
   /** Estimates USD cost for a given token usage and model. */
   static estimateCost(tokenInput: number, tokenOutput: number, model: string): number {
     const rates: Record<string, { input: number; output: number }> = {
+      "claude-haiku-4-5-20251001": { input: 0.80 / 1_000_000, output: 4.00 / 1_000_000 },
       "claude-sonnet-4-6": { input: 3 / 1_000_000, output: 15 / 1_000_000 },
-      "claude-opus-4-5": { input: 15 / 1_000_000, output: 75 / 1_000_000 },
+      "claude-opus-4-6": { input: 15 / 1_000_000, output: 75 / 1_000_000 },
+      "gpt-5.4": { input: 2.50 / 1_000_000, output: 15 / 1_000_000 },
+      "gpt-5.4-wide": { input: 5.00 / 1_000_000, output: 22.50 / 1_000_000 },
+      "o4-mini": { input: 1.10 / 1_000_000, output: 4.40 / 1_000_000 },
     };
     const r = rates[model] ?? rates["claude-sonnet-4-6"];
     return tokenInput * r.input + tokenOutput * r.output;
@@ -98,6 +104,14 @@ export class AgentRunner {
     if (taskAgent === "codex") return "claude";
     if (taskAgent === "claude" || taskAgent === "claude-sdk") return "codex";
     return "claude"; // generic agents reviewed by claude
+  }
+
+  /**
+   * Returns a fallback agent different from the current one.
+   * If current is "codex", returns "claude"; otherwise returns "codex".
+   */
+  static pickFallbackAgent(current: string): string {
+    return current === "codex" ? "claude" : "codex";
   }
 
   /**
@@ -138,6 +152,8 @@ export class AgentRunner {
       timeout,
       maxBudget: 1,
     });
+    // F6: Tag review tasks for --json-schema structured output
+    (reviewTask as Task & { _isReview?: boolean })._isReview = true;
 
     try {
       log("info", "cross-agent review started", { taskAgent, reviewAgent });
@@ -149,7 +165,7 @@ export class AgentRunner {
           status: reviewTask.status,
           error: reviewTask.error,
         });
-        return this.reviewDiff(diff);
+        return { ...this.reviewDiff(diff), reviewAgent: `${reviewAgent} (fallback)` };
       }
 
       // Parse the JSON response from the review agent
@@ -166,11 +182,11 @@ export class AgentRunner {
       }
 
       log("warn", "cross-agent review response unparseable, falling back to heuristic");
-      return this.reviewDiff(diff);
+      return { ...this.reviewDiff(diff), reviewAgent: `${reviewAgent} (fallback)` };
     } catch (err: unknown) {
       const msg = (err as Error).message ?? String(err);
       log("warn", "cross-agent review failed, falling back to heuristic", { error: msg });
-      return this.reviewDiff(diff);
+      return { ...this.reviewDiff(diff), reviewAgent: `${reviewAgent} (fallback)` };
     }
   }
 
@@ -233,6 +249,10 @@ export class AgentRunner {
   }
 
   buildSystemPrompt(task: Task, cwd: string = process.cwd()): string {
+    if (task.meta) {
+      return "";
+    }
+
     const parts: string[] = [];
 
     // Inject Development Rules from CLAUDE.md if present
@@ -334,8 +354,22 @@ export class AgentRunner {
       // No commits or git unavailable
     }
 
+    // F1: Empty commit detection — agent exited 0 but produced no commits
+    if (!task.meta && (task.status as string) === "success") {
+      try {
+        const { stdout: commits } = await execAsync("git log main..HEAD --oneline", { cwd, encoding: "utf8" });
+        if (!commits.trim()) {
+          task.status = "failed";
+          task.error = "no commits produced: agent completed but did not commit any changes";
+          log("warn", "empty commit detection triggered", { taskId: task.id });
+        }
+      } catch {
+        // git log failed — may not have main branch, skip check
+      }
+    }
+
     // Post-execution build verification — tsc failure blocks merge
-    if ((task.status as string) === "success") {
+    if (!task.meta && (task.status as string) === "success") {
       const buildResult = await this.verifyBuild(cwd);
       if (!buildResult.ok) {
         task.status = "failed";
@@ -389,7 +423,7 @@ export class AgentRunner {
         options: {
           cwd,
           env,
-          model: this.model,
+          model: task.modelOverride ?? task.model ?? this.model,
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           maxTurns: 50,
@@ -427,13 +461,30 @@ export class AgentRunner {
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "--verbose",
-        "--model", this.model,
+        "--model", task.modelOverride ?? task.model ?? this.model,
       ];
       if (task.maxBudget > 0) {
         args.push("--max-budget-usd", String(task.maxBudget));
       }
       if (sysPrompt) {
         args.push("--append-system-prompt", sysPrompt);
+      }
+      // F5: Resume previous session on retry to save tokens
+      if (task.sessionId && task.retryCount > 0) {
+        args.push("--resume", task.sessionId);
+      }
+      // F6: Structured output for review tasks
+      if ((task as Task & { _isReview?: boolean })._isReview) {
+        args.push("--json-schema", JSON.stringify({
+          type: "object",
+          properties: {
+            approve: { type: "boolean" },
+            score: { type: "number" },
+            issues: { type: "array", items: { type: "string" } },
+            suggestions: { type: "array", items: { type: "string" } },
+          },
+          required: ["approve", "score", "issues", "suggestions"],
+        }));
       }
       args.push(fullPrompt);
 
@@ -512,7 +563,16 @@ export class AgentRunner {
       }
     }
 
+    // Capture session ID for --resume on retry
+    if (type === "system" && msg.session_id) {
+      task.sessionId = msg.session_id as string;
+    }
+
     if (type === "result") {
+      // Capture session ID from result if not already set
+      if (!task.sessionId && msg.session_id) {
+        task.sessionId = msg.session_id as string;
+      }
       // Always capture metrics, even after timeout
       task.costUsd = (msg.total_cost_usd as number) ?? 0;
       const usage = msg.usage as { input_tokens?: number; output_tokens?: number } | undefined;
@@ -559,12 +619,15 @@ export class AgentRunner {
     return new Promise((resolve, reject) => {
       const fullPrompt = this.buildTaskPrompt(task, cwd);
 
+      // F7: Use task.model for Codex routing (gpt-5.4 for deep tasks), fallback to gpt-5.4
+      const codexModel = task.model?.startsWith("gpt-") ? task.model
+        : (this.model.startsWith("claude") ? "gpt-5.4" : this.model);
       const args = [
         "exec",
         "--dangerously-bypass-approvals-and-sandbox",
         "--json",
         "--cd", cwd,
-        "-m", this.model.startsWith("claude") ? "o4-mini" : this.model,
+        "-m", codexModel,
         fullPrompt,
       ];
 
@@ -642,8 +705,8 @@ export class AgentRunner {
       if (usage) {
         task.tokenInput += usage.input_tokens ?? 0;
         task.tokenOutput += usage.output_tokens ?? 0;
-        // Codex doesn't report cost — estimate from OpenAI pricing
-        task.costUsd = (task.tokenInput * 1.1 / 1_000_000) + (task.tokenOutput * 4.4 / 1_000_000);
+        // Codex cost estimate — use gpt-5.4 rates ($2.50/$15 per M tokens)
+        task.costUsd = (task.tokenInput * 2.5 / 1_000_000) + (task.tokenOutput * 15 / 1_000_000);
         const entry = this._runningTasks.get(task.id);
         if (entry) entry.costUsd = task.costUsd;
       }
@@ -725,6 +788,10 @@ export class AgentRunner {
 
   /** Build the full task prompt with instructions appended. */
   private buildTaskPrompt(task: Task, cwd: string = process.cwd()): string {
+    if (task.meta) {
+      return task.prompt;
+    }
+
     const lang = this.detectLanguage(cwd);
     const lines: string[] = [
       `${task.prompt}`,
@@ -752,6 +819,9 @@ export class AgentRunner {
       lines.push("- **Commit when done**: Stage and commit with `git add -A && git commit -m \"feat: <brief summary>\"`.");
     }
 
+    lines.push("");
+    lines.push("CRITICAL: You MUST run 'git add -A && git commit -m \"...\"' before exiting. If you do not commit, your work will be LOST and the task will be marked FAILED.");
+
     return lines.join("\n");
   }
 
@@ -777,6 +847,33 @@ export class AgentRunner {
       task.events.shift();
     }
     task.events.push(evt);
+  }
+
+  /** F9: Ensure Codex config.toml has default + wide profiles for GPT-5.4. */
+  static ensureCodexConfig(): void {
+    const codexDir = path.join(homedir(), ".codex");
+    const configPath = path.join(codexDir, "config.toml");
+
+    if (existsSync(configPath)) {
+      const content = readFileSync(configPath, "utf8");
+      if (content.includes("[profiles.wide]") && content.includes("gpt-5.4")) return;
+    }
+
+    mkdirSync(codexDir, { recursive: true });
+    const toml = [
+      "[profiles.default]",
+      'model = "gpt-5.4"',
+      'model_reasoning_effort = "medium"',
+      "",
+      "[profiles.wide]",
+      'model = "gpt-5.4"',
+      'model_reasoning_effort = "medium"',
+      "model_context_window = 1050000",
+      "model_auto_compact_token_limit = 900000",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, toml, "utf8");
+    log("info", "codex config.toml created with default + wide profiles", { path: configPath });
   }
 
   /** Kill a running task's process or abort SDK query. */

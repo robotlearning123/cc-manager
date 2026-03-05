@@ -623,6 +623,51 @@ describe("Store", () => {
     });
   });
 
+  describe("mergeGate persistence", () => {
+    it("save() and get() round-trip mergeGate field", () => {
+      const { store, cleanup } = makeTempStore();
+      try {
+        const mergeGate = {
+          executionPassed: true,
+          reviewApproved: true,
+          mergeEligible: true,
+          merged: false,
+          mergeReason: "waiting for pipeline verification",
+          conflictFiles: ["src/foo.ts"],
+          reviewedAt: "2024-01-01T00:00:00.000Z",
+        };
+        const task = makeTask({ id: "mg-1", mergeGate });
+        store.save(task);
+        const got = store.get("mg-1");
+        assert.ok(got !== null);
+        assert.deepStrictEqual(got.mergeGate, mergeGate);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it("update() can set mergeGate field", () => {
+      const { store, cleanup } = makeTempStore();
+      try {
+        store.save(makeTask({ id: "mg-2" }));
+        const mergeGate = {
+          executionPassed: true,
+          reviewApproved: false,
+          mergeEligible: false,
+          merged: false,
+          mergeReason: "review rejected",
+          conflictFiles: [],
+          reviewedAt: "2024-01-02T00:00:00.000Z",
+        };
+        const updated = store.update("mg-2", { mergeGate });
+        assert.ok(updated !== null);
+        assert.deepStrictEqual(updated.mergeGate, mergeGate);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   // ── close ───────────────────────────────────────────────────────────────────
 
   describe("close", () => {

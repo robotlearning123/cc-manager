@@ -292,6 +292,59 @@ program
     }
   });
 
+// ── pipeline ──
+program
+  .command("pipeline <goal>")
+  .description("Start an autonomous pipeline run")
+  .action(async (goal: string) => {
+    const result = await api("/api/pipeline", { method: "POST", body: JSON.stringify({ goal }) });
+    out(result, !!program.opts().json);
+  });
+
+program
+  .command("pipeline-list")
+  .description("List all pipeline runs")
+  .action(async () => {
+    const runs = await api<Array<Record<string, unknown>>>("/api/pipeline");
+    if (program.opts().json) {
+      console.log(JSON.stringify(runs, null, 2));
+    } else {
+      console.log(`${"ID".padEnd(18)} ${"STAGE".padEnd(20)} ${"MODE".padEnd(12)} GOAL`);
+      console.log("─".repeat(80));
+      for (const r of runs) {
+        console.log(`${String(r.id).padEnd(18)} ${String(r.stage).padEnd(20)} ${String(r.mode).padEnd(12)} ${String(r.goal ?? "").slice(0, 40)}`);
+      }
+      console.log(`\n${runs.length} pipeline runs`);
+    }
+  });
+
+program
+  .command("pipeline-status <id>")
+  .description("Get pipeline run details")
+  .action(async (id: string) => {
+    const run = await api<Record<string, unknown>>(`/api/pipeline/${id}`);
+    if (program.opts().json) {
+      console.log(JSON.stringify(run, null, 2));
+    } else {
+      const col = 18;
+      console.log(`  ${"ID".padEnd(col)}${run.id}`);
+      console.log(`  ${"Stage".padEnd(col)}${run.stage}`);
+      console.log(`  ${"Mode".padEnd(col)}${run.mode}`);
+      console.log(`  ${"Iteration".padEnd(col)}${run.iteration}/${run.maxIterations}`);
+      console.log(`  ${"Goal".padEnd(col)}${String(run.goal ?? "").slice(0, 120)}`);
+      if (run.error) console.log(`  ${"Error".padEnd(col)}\x1b[31m${String(run.error).slice(0, 200)}\x1b[0m`);
+      console.log("");
+    }
+  });
+
+program
+  .command("pipeline-approve <id>")
+  .description("Approve pipeline plan checkpoint")
+  .action(async (id: string) => {
+    const result = await api(`/api/pipeline/${id}/approve`, { method: "POST" });
+    out(result, !!program.opts().json);
+  });
+
 export { program };
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

@@ -4,6 +4,7 @@ import { WorktreePool } from "./worktree-pool.js";
 import { AgentRunner } from "./agent-runner.js";
 import { Store } from "./store.js";
 import { log } from "./logger.js";
+import { classifyTask } from "./task-classifier.js";
 
 type EventCallback = (event: Record<string, unknown>) => void;
 
@@ -18,6 +19,7 @@ export class Scheduler {
   private progressIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private dispatchResolve?: () => void;
   private abortedTasks = new Set<string>();
+  private cancelledTasks = new Set<string>();
 
   setTotalBudgetLimit(usd: number): void {
     this.totalBudgetLimit = usd;
@@ -68,18 +70,23 @@ export class Scheduler {
     }
   }
 
-  submit(prompt: string, opts?: { id?: string; timeout?: number; maxBudget?: number; priority?: import("./types.js").TaskPriority; dependsOn?: string; webhookUrl?: string; tags?: string[]; agent?: string }): Task {
-    if (prompt.length > 2000) {
+  submit(prompt: string, opts?: { id?: string; timeout?: number; maxBudget?: number; priority?: import("./types.js").TaskPriority; dependsOn?: string; webhookUrl?: string; tags?: string[]; agent?: string; allowLongPrompt?: boolean }): Task {
+    if (!opts?.allowLongPrompt && prompt.length > 2000) {
       log("warn", "prompt exceeds context budget, truncating", { originalLength: prompt.length });
       prompt = prompt.slice(0, 2000);
     }
     const task = createTask(prompt, opts);
+    // Auto-classify: apply model/timeout/budget only when caller didn't specify
+    const classification = classifyTask(prompt);
+    if (opts?.timeout === undefined) task.timeout = classification.timeout;
+    if (opts?.maxBudget === undefined) task.maxBudget = classification.maxBudget;
+    if (opts?.agent === undefined) task.model = classification.model;
     this.validateTask(task);
     this.tasks.set(task.id, task);
     this.queue.push(task);
     this.store.save(task);
-    this.onEvent?.({ type: "task_queued", taskId: task.id, queueSize: this.queue.length });
-    log("info", "task queued", { taskId: task.id, queueSize: this.queue.length });
+    this.onEvent?.({ type: "task_queued", taskId: task.id, queueSize: this.queue.length, category: classification.category });
+    log("info", "task queued", { taskId: task.id, category: classification.category, queueSize: this.queue.length });
     this.triggerDispatch();
     return task;
   }
@@ -132,6 +139,15 @@ export class Scheduler {
     return true;
   }
 
+  abort(id: string): boolean {
+    const task = this.tasks.get(id) ?? this.store.get(id) ?? undefined;
+    if (!task || task.status !== "running") return false;
+    const aborted = this.runner.abort(id);
+    if (!aborted) return false;
+    this.cancelledTasks.add(id);
+    return true;
+  }
+
   requeue(taskId: string): Task | null {
     const task = this.tasks.get(taskId) ?? this.store.get(taskId) ?? undefined;
     if (!task) return null;
@@ -140,9 +156,17 @@ export class Scheduler {
     // Ensure the task is tracked in the in-memory map (may only be in store)
     this.tasks.set(task.id, task);
 
+    // Preserve original prompt on first requeue to prevent accumulation
+    if (!task._originalPrompt) task._originalPrompt = task.prompt;
+    const prevError = task.error ?? "";
+    task.retryCount += 1;
+    if (prevError) {
+      const errorContext = prevError.length > 500 ? prevError.slice(0, 500) + "..." : prevError;
+      task.prompt = `${task._originalPrompt}\n\n---\n## Previous Attempt Failed (attempt ${task.retryCount}/${task.maxRetries})\nError: ${errorContext}\nFix the error above and try again.`;
+    }
+
     task.status = "pending";
     task.error = "";
-    task.retryCount += 1;
     task.completedAt = undefined;
 
     this.queue.push(task);
@@ -428,18 +452,28 @@ export class Scheduler {
 
       // Dependency check: skip if dependency hasn't completed successfully yet
       if (task.dependsOn) {
-        const dep = this.tasks.get(task.dependsOn) ?? this.store.get(task.dependsOn) ?? undefined;
-        if (dep?.status !== "success") {
-          // If dependency is in a terminal failure state (or missing), fail this task
+        const deps = Array.isArray(task.dependsOn) ? task.dependsOn : [task.dependsOn];
+        let allSuccess = true;
+        let failedDepId = "";
+        let failedDepStatus = "";
+
+        for (const depId of deps) {
+          const dep = this.tasks.get(depId) ?? this.store.get(depId) ?? undefined;
           if (!dep || dep.status === "failed" || dep.status === "timeout" || dep.status === "cancelled") {
             task.status = "failed";
-            task.error = `dependency ${task.dependsOn} is ${dep?.status ?? "missing"}`;
+            task.error = `dependency ${depId} is ${dep?.status ?? "missing"}`;
             task.completedAt = new Date().toISOString();
             this.store.save(task);
             this.onEvent?.({ type: "task_final", taskId: task.id, status: task.status });
-            continue;
+            failedDepId = depId;
+            break;
           }
-          // Still pending/running — re-queue and wait
+          if (dep.status !== "success") {
+            allSuccess = false;
+          }
+        }
+        if (failedDepId) continue;
+        if (!allSuccess) {
           log("info", "task waiting on dependency", { taskId: task.id, dependsOn: task.dependsOn });
           this.queue.push(task);
           await this.waitForDispatch(1_000);
@@ -483,7 +517,11 @@ export class Scheduler {
           task.review = review;
           if (!review.approve) {
             shouldMerge = false;
-            task.error = `review rejected (score ${review.score}): ${review.issues.join("; ")}`;
+            task.status = "failed";
+            task.mergeGate = { executionPassed: true, reviewApproved: false, reviewedAt: new Date().toISOString() };
+            task.error = review.issues.length > 0
+              ? `review rejected (score ${review.score}): ${review.issues.join("; ")}`
+              : `review rejected (score ${review.score})`;
             log("info", "cross-agent review rejected merge", {
               taskId: task.id,
               score: review.score,
@@ -491,6 +529,7 @@ export class Scheduler {
             });
             this.onEvent?.({ type: "review_rejected", taskId: task.id, score: review.score, issues: review.issues });
           } else {
+            task.mergeGate = { executionPassed: true, reviewApproved: true, reviewedAt: new Date().toISOString() };
             log("info", "cross-agent review approved merge", { taskId: task.id, score: review.score });
             this.onEvent?.({ type: "review_approved", taskId: task.id, score: review.score });
           }
@@ -498,7 +537,30 @@ export class Scheduler {
       }
       const mergeResult = await this.pool.release(workerName, shouldMerge, task.id);
 
+      // Update mergeGate with merge result
+      if (task.mergeGate && mergeResult.merged) {
+        task.mergeGate.mergeEligible = true;
+        task.mergeGate.merged = true;
+        task.mergeGate.mergedAt = new Date().toISOString();
+      }
+
+      // After successful merge, rebase all other active workers onto new main
+      if (shouldMerge && mergeResult.merged) {
+        const activeWorkers = this.pool.getActiveWorkers(workerName);
+        for (const otherWorker of activeWorkers) {
+          await this.pool.rebaseOnMain(otherWorker).catch((err) => {
+            log("warn", "rebase failed for active worker", { worker: otherWorker, err: String(err) });
+          });
+        }
+      }
+
       if (shouldMerge && !mergeResult.merged) {
+        task.status = "failed";
+        if (task.mergeGate) {
+          task.mergeGate.mergeEligible = true;
+          task.mergeGate.merged = false;
+          task.mergeGate.conflictFiles = mergeResult.conflictFiles;
+        }
         const fileList = mergeResult.conflictFiles?.length
           ? `: ${mergeResult.conflictFiles.join(", ")}`
           : "";
@@ -518,8 +580,16 @@ export class Scheduler {
         clearInterval(interval);
         this.progressIntervals.delete(task.id);
       }
-      // If stale recovery flagged this task, force timeout status and skip retry
-      if (this.abortedTasks.has(task.id)) {
+      // If user cancelled this task via abort(), mark cancelled — but only if
+      // a failure path (review rejection, merge conflict) hasn't already set a status
+      if (this.cancelledTasks.has(task.id)) {
+        this.cancelledTasks.delete(task.id);
+        if (task.status === "running") {
+          task.status = "cancelled";
+          task.error = "Cancelled by user";
+          task.completedAt = new Date().toISOString();
+        }
+      } else if (this.abortedTasks.has(task.id)) {
         this.abortedTasks.delete(task.id);
         task.status = "timeout";
         task.error = "Task exceeded timeout + grace period and was forcefully recovered";
@@ -528,11 +598,26 @@ export class Scheduler {
       // Retry logic: re-queue failed tasks (not timeout/cancelled) up to maxRetries times
       if (task.status === "failed" && task.retryCount < task.maxRetries) {
         shouldRetry = true;
+        const prevError = task.error ?? "";
         task.retryCount++;
         task.status = "pending";
-        task.error = "";
         task.completedAt = undefined;
-        log("info", "task retrying", { taskId: task.id, attempt: task.retryCount, maxRetries: task.maxRetries });
+        // Store original prompt on first retry to prevent accumulation
+        if (!task._originalPrompt) task._originalPrompt = task.prompt;
+        // Rebuild from original prompt + latest error (no accumulation)
+        if (prevError) {
+          const errorContext = prevError.length > 500 ? prevError.slice(0, 500) + "..." : prevError;
+          task.prompt = `${task._originalPrompt}\n\n---\n## Previous Attempt Failed (attempt ${task.retryCount}/${task.maxRetries})\nError: ${errorContext}\nFix the error above and try again.`;
+        }
+        // Model escalation: retry 2+ uses Opus
+        if (task.retryCount >= 2) {
+          task.modelOverride = "claude-opus-4-6";
+          log("info", "escalating model for retry", { taskId: task.id, model: "claude-opus-4-6" });
+        }
+        // Swap agent on retry for better chance of success
+        const prevAgent = task.agent ?? "claude";
+        task.agent = AgentRunner.pickFallbackAgent(prevAgent);
+        log("info", "task retrying with error context", { taskId: task.id, attempt: task.retryCount, maxRetries: task.maxRetries, agent: prevAgent, fallback: task.agent });
       }
       this.activeWorkers.delete(workerName);
       this.triggerDispatch(); // wake the loop now that a worker slot is free

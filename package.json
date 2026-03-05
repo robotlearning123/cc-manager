@@ -1,6 +1,6 @@
 {
   "name": "cc-manager",
-  "version": "0.1.0",
+  "version": "0.1.7",
   "description": "Multi-agent orchestrator for Claude Code",
   "type": "module",
   "bin": {

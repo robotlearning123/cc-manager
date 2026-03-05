@@ -11,10 +11,22 @@ export interface ReviewResult {
   reviewAgent?: string;
 }
 
+export interface MergeGateState {
+  executionPassed: boolean;
+  reviewApproved?: boolean;
+  mergeEligible?: boolean;
+  merged?: boolean;
+  mergeReason?: string;
+  conflictFiles?: string[];
+  reviewedAt?: string;
+  mergedAt?: string;
+}
+
 export interface Task {
   id: string;
   prompt: string;
   status: TaskStatus;
+  meta?: boolean;
   priority: TaskPriority;
   worktree?: string;
   output: string;
@@ -31,12 +43,17 @@ export interface Task {
   durationMs: number;
   retryCount: number;
   maxRetries: number;
-  dependsOn?: string;
+  dependsOn?: string | string[];
   tags?: string[];
   webhookUrl?: string;
   summary?: string;
   agent?: string;
+  model?: string;
+  modelOverride?: string;
+  sessionId?: string;
   review?: ReviewResult;
+  mergeGate?: MergeGateState;
+  _originalPrompt?: string;
 }
 
 export interface TaskEvent {
@@ -112,6 +129,7 @@ export interface TaskCreateInput {
   maxBudget?: number;
   priority?: Task["priority"];
   agent?: string;
+  meta?: boolean;
 }
 
 export interface HarnessConfig {
@@ -168,11 +186,12 @@ export interface FlywheelState {
   lastAnalysis: EvolutionEntry | undefined;
 }
 
-export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "timeout" | "maxBudget" | "maxRetries" | "priority" | "dependsOn" | "tags" | "webhookUrl" | "agent">>): Task {
+export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "timeout" | "maxBudget" | "maxRetries" | "priority" | "dependsOn" | "tags" | "webhookUrl" | "agent" | "model" | "meta">>): Task {
   return {
     id: opts?.id ?? crypto.randomUUID().replace(/-/g, "").slice(0, 16),
     prompt,
     status: "pending",
+    meta: opts?.meta,
     priority: opts?.priority ?? "normal",
     output: "",
     error: "",
@@ -190,5 +209,6 @@ export function createTask(prompt: string, opts?: Partial<Pick<Task, "id" | "tim
     tags: opts?.tags,
     webhookUrl: opts?.webhookUrl,
     agent: opts?.agent ?? "claude",
+    model: opts?.model,
   };
 }

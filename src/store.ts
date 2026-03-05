@@ -37,7 +37,8 @@ export class Store {
         tags TEXT DEFAULT '[]',
         depends_on TEXT,
         webhook_url TEXT,
-        summary TEXT
+        summary TEXT,
+        merge_gate TEXT
       )
     `);
     // Add max_retries column to existing databases that predate this migration
@@ -88,6 +89,15 @@ export class Store {
     } catch {
       // Column already exists — safe to ignore
     }
+    try {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN original_prompt TEXT");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN session_id TEXT");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN merge_gate TEXT");
+    } catch {}
     // Indexes for common query patterns
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)"
@@ -122,6 +132,9 @@ export class Store {
       task.dependsOn ?? null, task.webhookUrl ?? null, task.summary ?? null,
       task.agent ?? "claude",
       JSON.stringify(task.review ?? null),
+      JSON.stringify(task.mergeGate ?? null),
+      task._originalPrompt ?? null,
+      task.sessionId ?? null,
     ];
   }
 
@@ -133,8 +146,8 @@ export class Store {
       (id, prompt, status, worktree, output, error, events, created_at,
        started_at, completed_at, timeout, max_budget, cost_usd,
        token_input, token_output, duration_ms, retry_count, max_retries, priority, tags,
-       depends_on, webhook_url, summary, agent, review)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       depends_on, webhook_url, summary, agent, review, merge_gate, original_prompt, session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(...params);
     if (insertResult.changes === 0) {
       // Row already exists — update it (params[0] is id, rest are fields; append id at end for WHERE)
@@ -143,7 +156,8 @@ export class Store {
           prompt=?, status=?, worktree=?, output=?, error=?, events=?, created_at=?,
           started_at=?, completed_at=?, timeout=?, max_budget=?, cost_usd=?,
           token_input=?, token_output=?, duration_ms=?, retry_count=?, max_retries=?,
-          priority=?, tags=?, depends_on=?, webhook_url=?, summary=?, agent=?, review=?
+          priority=?, tags=?, depends_on=?, webhook_url=?, summary=?, agent=?, review=?, merge_gate=?,
+          original_prompt=?, session_id=?
         WHERE id=?
       `).run(...params.slice(1), task.id);
     }
@@ -160,15 +174,16 @@ export class Store {
       (id, prompt, status, worktree, output, error, events, created_at,
        started_at, completed_at, timeout, max_budget, cost_usd,
        token_input, token_output, duration_ms, retry_count, max_retries, priority, tags,
-       depends_on, webhook_url, summary, agent, review)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       depends_on, webhook_url, summary, agent, review, merge_gate, original_prompt, session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const updateStmt = this.db.prepare(`
       UPDATE tasks SET
         prompt=?, status=?, worktree=?, output=?, error=?, events=?, created_at=?,
         started_at=?, completed_at=?, timeout=?, max_budget=?, cost_usd=?,
         token_input=?, token_output=?, duration_ms=?, retry_count=?, max_retries=?,
-        priority=?, tags=?, depends_on=?, webhook_url=?, summary=?, agent=?, review=?
+        priority=?, tags=?, depends_on=?, webhook_url=?, summary=?, agent=?, review=?, merge_gate=?,
+        original_prompt=?, session_id=?
       WHERE id=?
     `);
     const runAll = this.db.transaction((batch: Task[]) => {
@@ -198,15 +213,16 @@ export class Store {
       (id, prompt, status, worktree, output, error, events, created_at,
        started_at, completed_at, timeout, max_budget, cost_usd,
        token_input, token_output, duration_ms, retry_count, max_retries, priority, tags,
-       depends_on, webhook_url, summary, agent, review)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       depends_on, webhook_url, summary, agent, review, merge_gate, original_prompt, session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const updateStmt = this.db.prepare(`
       UPDATE tasks SET
         prompt=?, status=?, worktree=?, output=?, error=?, events=?, created_at=?,
         started_at=?, completed_at=?, timeout=?, max_budget=?, cost_usd=?,
         token_input=?, token_output=?, duration_ms=?, retry_count=?, max_retries=?,
-        priority=?, tags=?, depends_on=?, webhook_url=?, summary=?, agent=?, review=?
+        priority=?, tags=?, depends_on=?, webhook_url=?, summary=?, agent=?, review=?, merge_gate=?,
+        original_prompt=?, session_id=?
       WHERE id=?
     `);
     this.transaction(() => {
@@ -246,11 +262,14 @@ export class Store {
       maxRetries:  { col: "max_retries" },
       priority:    { col: "priority" },
       tags:        { col: "tags",        serialize: (v) => JSON.stringify(v) },
-      dependsOn:   { col: "depends_on" },
+      dependsOn:   { col: "depends_on", serialize: (v) => v == null ? null : Array.isArray(v) ? JSON.stringify(v as unknown[]) : v as string },
       webhookUrl:  { col: "webhook_url" },
       summary:     { col: "summary" },
       agent:       { col: "agent" },
       review:      { col: "review",     serialize: (v) => JSON.stringify(v) },
+      mergeGate:   { col: "merge_gate", serialize: (v) => JSON.stringify(v) },
+      _originalPrompt: { col: "original_prompt" },
+      sessionId:       { col: "session_id" },
     };
 
     const setClauses: string[] = [];
@@ -404,12 +423,15 @@ export class Store {
       maxRetries: row.max_retries ?? 2,
       priority: (row.priority ?? "normal") as import("./types.js").TaskPriority,
       tags: this.safeJsonParse(row.tags, []),
-      dependsOn: row.depends_on ?? undefined,
+      dependsOn: (() => { const raw = row.depends_on as string|null|undefined; if (!raw) return undefined; if (raw.startsWith('[')) { try { return JSON.parse(raw) as string[]; } catch { return raw; } } return raw; })(),
       webhookUrl: row.webhook_url ?? undefined,
       summary: row.summary ?? undefined,
       agent: row.agent ?? "claude",
       // ?? undefined converts null (from JSON.parse("null")) back to undefined
       review: this.safeJsonParse(row.review, undefined) ?? undefined,
+      mergeGate: this.safeJsonParse(row.merge_gate, undefined) ?? undefined,
+      _originalPrompt: (row.original_prompt as string | null) ?? undefined,
+      sessionId: (row.session_id as string | null) ?? undefined,
     };
   }
 
@@ -549,6 +571,10 @@ export class Store {
       analysis: this.safeJsonParse(r.analysis, {}) as Record<string, unknown>,
       createdAt: r.created_at as string,
     }));
+  }
+
+  getDb(): import("better-sqlite3").Database {
+    return this.db;
   }
 
   close(): void {

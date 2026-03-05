@@ -2,9 +2,10 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { AgentRunner, type ReviewResult } from "../agent-runner.js";
 import { createTask } from "../types.js";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 describe("AgentRunner", () => {
   // Temp directories for language detection tests
@@ -40,7 +41,7 @@ describe("AgentRunner", () => {
   });
 
   it("estimateCost returns correct values for opus model", () => {
-    const cost = AgentRunner.estimateCost(1_000_000, 1_000_000, "claude-opus-4-5");
+    const cost = AgentRunner.estimateCost(1_000_000, 1_000_000, "claude-opus-4-6");
     assert.strictEqual(cost, 90); // 15 + 75
   });
 
@@ -141,7 +142,7 @@ describe("AgentRunner", () => {
   });
 
   it("constructor accepts custom parameters", () => {
-    const runner = new AgentRunner("claude-opus-4-5", "be concise", "codex");
+    const runner = new AgentRunner("claude-opus-4-6", "be concise", "codex");
     assert.deepStrictEqual(runner.getRunningTasks(), []);
   });
 
@@ -407,6 +408,116 @@ describe("AgentRunner", () => {
     assert.strictEqual(parse('{"score": 80, "issues": []}'), null); // missing approve
     assert.strictEqual(parse('{"approve": "yes", "score": 80}'), null); // approve is string
     assert.strictEqual(parse('{"approve": true, "issues": []}'), null); // missing score
+  });
+
+  // ── F2: buildTaskPrompt enforces commit ──
+
+  it("buildTaskPrompt includes CRITICAL commit enforcement", () => {
+    const runner = new AgentRunner();
+    const task = createTask("fix a bug in src/server.ts");
+    const prompt = (runner as unknown as { buildTaskPrompt: (t: typeof task, cwd: string) => string }).buildTaskPrompt(task, "/tmp");
+    assert.ok(prompt.includes("CRITICAL"), "prompt should contain CRITICAL commit warning");
+    assert.ok(prompt.includes("MUST run"), "prompt should enforce git commit");
+  });
+
+  it("buildTaskPrompt returns the raw prompt for meta tasks", () => {
+    const runner = new AgentRunner();
+    const task = createTask("plan the work only", { meta: true });
+    const prompt = (runner as unknown as { buildTaskPrompt: (t: typeof task, cwd: string) => string }).buildTaskPrompt(task, tsDir);
+    assert.strictEqual(prompt, "plan the work only");
+  });
+
+  it("buildSystemPrompt omits coding-task instructions for meta tasks", () => {
+    const runner = new AgentRunner();
+    const task = createTask("research the repository", { meta: true });
+    const prompt = runner.buildSystemPrompt(task, tsDir);
+    assert.strictEqual(prompt, "");
+  });
+
+  it("run() lets a meta task succeed without commits or build verification", async () => {
+    const runner = new AgentRunner();
+    const repoDir = mkdtempSync(join(tmpdir(), "meta-runner-repo-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
+      writeFileSync(join(repoDir, "tsconfig.json"), JSON.stringify({ include: ["src/**/*.ts"] }));
+      execFileSync("git", ["add", "."], { cwd: repoDir });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir });
+
+      const task = createTask("research the repository", { agent: "echo", timeout: 5, meta: true });
+      await runner.run(task, repoDir);
+
+      assert.strictEqual(task.status, "success");
+      assert.ok(task.output.includes("research the repository"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  // ── F4: Complete pricing table ──
+
+  it("estimateCost returns correct values for haiku", () => {
+    const cost = AgentRunner.estimateCost(1_000_000, 1_000_000, "claude-haiku-4-5-20251001");
+    assert.strictEqual(cost, 4.8); // 0.80 + 4.00
+  });
+
+  it("estimateCost returns correct values for gpt-5.4", () => {
+    const cost = AgentRunner.estimateCost(1_000_000, 1_000_000, "gpt-5.4");
+    assert.strictEqual(cost, 17.5); // 2.50 + 15.00
+  });
+
+  it("estimateCost returns correct values for o4-mini", () => {
+    const cost = AgentRunner.estimateCost(1_000_000, 1_000_000, "o4-mini");
+    assert.strictEqual(cost, 5.5); // 1.10 + 4.40
+  });
+
+  it("estimateCost returns correct values for gpt-5.4-wide", () => {
+    const cost = AgentRunner.estimateCost(1_000_000, 1_000_000, "gpt-5.4-wide");
+    assert.strictEqual(cost, 27.5); // 5.00 + 22.50
+  });
+
+  // ── F5: sessionId capture ──
+
+  it("handleClaudeEvent captures sessionId from system message", () => {
+    const runner = new AgentRunner();
+    const task = createTask("test");
+    task.status = "running";
+    const handler = (runner as unknown as { handleClaudeEvent: Function }).handleClaudeEvent.bind(runner);
+    handler({ type: "system", session_id: "sess_abc123" }, task, Date.now());
+    assert.strictEqual(task.sessionId, "sess_abc123");
+  });
+
+  it("handleClaudeEvent captures sessionId from result if not set", () => {
+    const runner = new AgentRunner();
+    const task = createTask("test");
+    task.status = "running";
+    const handler = (runner as unknown as { handleClaudeEvent: Function }).handleClaudeEvent.bind(runner);
+    handler({
+      type: "result", subtype: "success", result: "done",
+      session_id: "sess_def456",
+      total_cost_usd: 0.1, usage: { input_tokens: 100, output_tokens: 50 },
+    }, task, Date.now());
+    assert.strictEqual(task.sessionId, "sess_def456");
+  });
+
+  // ── F9: Codex config.toml ──
+
+  it("ensureCodexConfig creates config with default + wide profiles", () => {
+    const origHome = process.env.HOME;
+    const tmpHome = mkdtempSync(join(tmpdir(), "test-codex-config-"));
+    process.env.HOME = tmpHome;
+    try {
+      AgentRunner.ensureCodexConfig();
+      const content = readFileSync(join(tmpHome, ".codex", "config.toml"), "utf8");
+      assert.ok(content.includes("[profiles.default]"), "should have default profile");
+      assert.ok(content.includes("[profiles.wide]"), "should have wide profile");
+      assert.ok(content.includes("gpt-5.4"), "should use gpt-5.4");
+      assert.ok(content.includes("1050000"), "wide profile should have 1M context");
+    } finally {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 
   // ── reviewDiff approve field ──
